@@ -32,8 +32,8 @@ const SERVICOS_OFICIAIS = {
   sigef: "https://acervofundiario.incra.gov.br/",
   car: "https://www.car.gov.br/#/consultar",
   intermatPortal: "https://intergeo.intermat.mt.gov.br/portal/home/",
-  sigefFeatureServer: "/proxy/sigef/query",
-  carWfs: "/proxy/car",
+  sigefFeatureServer: "/api/sigef/query",
+  carWfs: "/api/car",
 };
 
 function uid() {
@@ -1112,7 +1112,7 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     setResultadoIntermat("Consultando catálogo do INTERMAT...");
 
     try {
-      const resposta = await fetch(`/proxy/intermat?f=pjson`);
+      const resposta = await fetch(`/api/intermat?f=pjson`);
       if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
 
       const json = await resposta.json();
@@ -1140,7 +1140,7 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
 
     try {
       const layerId = consultaForm.layerIntermat.trim();
-      const respostaInfo = await fetch(`/proxy/intermat/${layerId}?f=pjson`);
+      const respostaInfo = await fetch(`/api/intermat/${layerId}?f=pjson`);
       if (!respostaInfo.ok) throw new Error(`HTTP ${respostaInfo.status}`);
 
       const info = await respostaInfo.json();

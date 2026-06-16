@@ -1,16 +1,7 @@
 {
-  "rewrites": [
-    {
-      "source": "/proxy/car",
-      "destination": "https://geoserver.car.gov.br/geoserver/sicar/ows"
-    },
-    {
-      "source": "/proxy/sigef/:path*",
-      "destination": "https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_sigef_publico_incra_p/FeatureServer/0/:path*"
-    },
-    {
-      "source": "/proxy/intermat/:path*",
-      "destination": "https://intergeo.intermat.mt.gov.br/server/rest/services/INTERGEO/Base_Cartrografica/FeatureServer/:path*"
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 30
     }
-  ]
+  }
 }
