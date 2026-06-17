@@ -5,6 +5,22 @@ import * as toGeoJSON from "@tmcw/togeojson";
 import * as turf from "@turf/turf";
 import * as shpwrite from "@mapbox/shp-write";
 import logoLongitude from "./assets/logo-longitude.png";
+import {
+  AlignmentType,
+  Document,
+  HeadingLevel,
+  ImageRun,
+  Packer,
+  PageOrientation,
+  Paragraph,
+  SectionType,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+  BorderStyle,
+} from "docx";
 
 const STORAGE_KEY = "longitude_geo_mvp_v8_corrigido";
 
@@ -61,6 +77,23 @@ function salvarArquivo(nome, conteudo, tipo = "text/plain;charset=utf-8") {
   a.download = nome;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function salvarBlob(nome, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nome;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function textoRelatorio(valor) {
+  return String(valor ?? "-")
+    .replace(/\s+/g, " ")
+    .replace(/-/g, "- ")
+    .replace(/(.{28})/g, "$1 ")
+    .trim() || "-";
 }
 
 function nomeArquivoSeguro(valor, padrao = "parcela-consultada") {
@@ -928,17 +961,12 @@ function normalizarComparacao(valor) {
     salvarArquivo("intersecoes-sobreposicao-longitude.geojson", JSON.stringify(analiseSobreposicao.intersecoes, null, 2), "application/geo+json;charset=utf-8");
   }
 
-  async function logoComoDataUrl() {
+  async function logoComoBytes() {
     try {
       const resposta = await fetch(logoLongitude);
-      const blob = await resposta.blob();
-      return await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
+      return await resposta.arrayBuffer();
     } catch {
-      return "";
+      return null;
     }
   }
 
@@ -948,88 +976,182 @@ function normalizarComparacao(valor) {
       return;
     }
 
-    const logo = await logoComoDataUrl();
-    const linhas = analiseSobreposicao.resultados.map((r, i) => `
-      <tr>
-        <td>${i + 1}</td>
-        <td>${r.origem}</td>
-        <td>${r.codigo}</td>
-        <td>${r.sncr}</td>
-        <td>${r.nome}</td>
-        <td>${r.matricula}</td>
-        <td>${r.municipio}</td>
-        <td>${r.status}</td>
-        <td>${numeroBR(r.areaParcelaHa)}</td>
-        <td>${numeroBR(r.areaSobrepostaHa)}</td>
-        <td>${numeroBR(r.percentualSobreBase, 2)}%</td>
-      </tr>`).join("");
+    const logoBytes = await logoComoBytes();
 
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Relatório de Análise de Sobreposição</title>
-<style>
-  body { font-family: Arial, sans-serif; color: #1f2933; }
-  .cabecalho { display: flex; align-items: center; border-bottom: 3px solid #003b5c; padding-bottom: 12px; margin-bottom: 22px; }
-  .cabecalho img { width: 110px; height: auto; margin-right: 18px; }
-  h1 { color: #003b5c; font-size: 22px; margin: 0; }
-  h2 { color: #003b5c; font-size: 16px; margin-top: 22px; }
-  .sub { color: #3d8b37; font-weight: bold; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 10px; }
-  th { background: #003b5c; color: white; padding: 6px; border: 1px solid #cbd5e1; }
-  td { padding: 5px; border: 1px solid #cbd5e1; vertical-align: top; }
-  .resumo td { font-size: 12px; }
-  .nota { font-size: 11px; color: #475569; margin-top: 18px; }
-  .assinatura { margin-top: 60px; }
-</style>
-</head>
-<body>
-  <div class="cabecalho">
-    ${logo ? `<img src="${logo}" />` : ""}
-    <div>
-      <h1>RELATÓRIO DE ANÁLISE DE SOBREPOSIÇÃO</h1>
-      <div class="sub">Longitude Assessoria Rural e Urbano</div>
-    </div>
-  </div>
+    const azul = "003B5C";
+    const verde = "3D8B37";
+    const cinzaClaro = "E8EEF3";
+    const borda = { style: BorderStyle.SINGLE, size: 1, color: "CBD5E1" };
 
-  <h2>1. Identificação</h2>
-  <table class="resumo">
-    <tr><td><b>Data da análise</b></td><td>${analiseSobreposicao.data}</td></tr>
-    <tr><td><b>Área do perímetro analisado</b></td><td>${numeroBR(analiseSobreposicao.areaBaseHa)} ha</td></tr>
-    <tr><td><b>Área total sobreposta</b></td><td>${numeroBR(analiseSobreposicao.totalSobrepostoHa)} ha</td></tr>
-    <tr><td><b>Percentual sobre o perímetro</b></td><td>${numeroBR(analiseSobreposicao.percentualTotal, 2)}%</td></tr>
-    <tr><td><b>Quantidade de sobreposições</b></td><td>${analiseSobreposicao.quantidade}</td></tr>
-  </table>
+    const p = (texto, opts = {}) => new Paragraph({
+      spacing: { after: opts.after ?? 120, before: opts.before ?? 0 },
+      alignment: opts.alignment || AlignmentType.LEFT,
+      heading: opts.heading,
+      children: [
+        new TextRun({
+          text: texto,
+          bold: opts.bold || false,
+          size: opts.size || 22,
+          color: opts.color || "1F2933",
+        }),
+      ],
+    });
 
-  <h2>2. Bases analisadas</h2>
-  <p>Foram consideradas as feições carregadas/consultadas no sistema Longitude Geo Intelligence, incluindo base SIGEF local importada, CAR/SICAR consultado e demais perímetros disponíveis no momento da análise.</p>
+    const tituloSecao = (texto) => new Paragraph({
+      heading: HeadingLevel.HEADING_2,
+      spacing: { before: 240, after: 120 },
+      children: [new TextRun({ text: texto, bold: true, size: 24, color: azul })],
+    });
 
-  <h2>3. Quadro de sobreposições identificadas</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th><th>Origem</th><th>Código</th><th>SNCR/Código Imóvel</th><th>Nome</th><th>Matrícula</th><th>Município</th><th>Status</th><th>Área Parcela (ha)</th><th>Sobreposição (ha)</th><th>% sobre perímetro</th>
-      </tr>
-    </thead>
-    <tbody>${linhas || `<tr><td colspan="11">Nenhuma sobreposição identificada.</td></tr>`}</tbody>
-  </table>
+    const celula = (texto, opts = {}) => new TableCell({
+      width: opts.width ? { size: opts.width, type: WidthType.PERCENTAGE } : undefined,
+      shading: opts.header ? { fill: azul } : opts.fill ? { fill: opts.fill } : undefined,
+      margins: { top: 80, bottom: 80, left: 80, right: 80 },
+      borders: { top: borda, bottom: borda, left: borda, right: borda },
+      children: [
+        new Paragraph({
+          alignment: opts.align || AlignmentType.LEFT,
+          children: [
+            new TextRun({
+              text: textoRelatorio(texto),
+              bold: opts.bold || opts.header || false,
+              color: opts.header ? "FFFFFF" : "1F2933",
+              size: opts.size || (opts.header ? 14 : 14),
+            }),
+          ],
+        }),
+      ],
+    });
 
-  <h2>4. Conclusão técnica preliminar</h2>
-  <p>Após o cruzamento espacial realizado, foram identificadas as sobreposições descritas no quadro acima. Este relatório possui caráter técnico preliminar e deve ser validado com conferência da origem, data de atualização das bases, sistema de referência geodésico e documentação dominial/cadastral do imóvel.</p>
+    const tabelaResumo = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        ["Data da análise", analiseSobreposicao.data],
+        ["Área do perímetro analisado", `${numeroBR(analiseSobreposicao.areaBaseHa)} ha`],
+        ["Área total sobreposta", `${numeroBR(analiseSobreposicao.totalSobrepostoHa)} ha`],
+        ["Percentual sobre o perímetro", `${numeroBR(analiseSobreposicao.percentualTotal, 2)}%`],
+        ["Quantidade de sobreposições", analiseSobreposicao.quantidade],
+      ].map(([a, b]) => new TableRow({
+        children: [celula(a, { bold: true, fill: cinzaClaro, width: 42, size: 18 }), celula(String(b), { width: 58, size: 18 })],
+      })),
+    });
 
-  <p class="nota">Observação: o cálculo foi realizado em ambiente web com base nas geometrias carregadas no sistema. Para uso cartorial, judicial ou bancário, recomenda-se conferência em ambiente SIG profissional e emissão com assinatura técnica.</p>
+    const cabecalho = new Paragraph({
+      spacing: { after: 120 },
+      children: [
+        ...(logoBytes ? [new ImageRun({ data: logoBytes, transformation: { width: 82, height: 105 } })] : []),
+      ],
+    });
 
-  <div class="assinatura">
-    <p>______________________________________________</p>
-    <p><b>Alexandre Magno Gomes de Lima</b><br/>Longitude Assessoria Rural e Urbano</p>
-  </div>
-</body>
-</html>`;
+    const linhas = analiseSobreposicao.resultados.map((r, i) => new TableRow({
+      children: [
+        celula(String(i + 1), { width: 4, align: AlignmentType.CENTER }),
+        celula(r.origem, { width: 9 }),
+        celula(r.codigo, { width: 20 }),
+        celula(r.sncr, { width: 13 }),
+        celula(r.nome, { width: 18 }),
+        celula(r.matricula, { width: 8 }),
+        celula(r.municipio, { width: 9 }),
+        celula(r.status, { width: 7 }),
+        celula(numeroBR(r.areaParcelaHa), { width: 6, align: AlignmentType.RIGHT }),
+        celula(numeroBR(r.areaSobrepostaHa), { width: 6, align: AlignmentType.RIGHT }),
+      ],
+    }));
 
-    salvarArquivo("Relatorio_Sobreposicao_Longitude.doc", html, "application/msword;charset=utf-8");
+    const tabelaSobreposicoes = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          tableHeader: true,
+          children: [
+            celula("#", { header: true, width: 4, align: AlignmentType.CENTER }),
+            celula("Origem", { header: true, width: 9 }),
+            celula("Código", { header: true, width: 20 }),
+            celula("SNCR/Cód. Imóvel", { header: true, width: 13 }),
+            celula("Nome", { header: true, width: 18 }),
+            celula("Matrícula", { header: true, width: 8 }),
+            celula("Município", { header: true, width: 9 }),
+            celula("Status", { header: true, width: 7 }),
+            celula("Área Parcela", { header: true, width: 6 }),
+            celula("Sobreposição", { header: true, width: 6 }),
+          ],
+        }),
+        ...(linhas.length ? linhas : [new TableRow({ children: [celula("Nenhuma sobreposição identificada.", { width: 100 })] })]),
+      ],
+    });
+
+    const doc = new Document({
+      creator: "Longitude Geo Intelligence",
+      title: "Relatório de Análise de Sobreposição",
+      description: "Relatório técnico preliminar gerado pela plataforma Longitude Geo Intelligence.",
+      styles: {
+        default: {
+          document: { run: { font: "Arial", size: 22 } },
+        },
+      },
+      sections: [
+        {
+          properties: {
+            type: SectionType.NEXT_PAGE,
+            page: {
+              margin: { top: 720, right: 720, bottom: 720, left: 720 },
+            },
+          },
+          children: [
+            ...(logoBytes ? [cabecalho] : []),
+            new Paragraph({
+              spacing: { after: 40 },
+              children: [new TextRun({ text: "RELATÓRIO DE ANÁLISE DE SOBREPOSIÇÃO", bold: true, size: 30, color: azul })],
+            }),
+            new Paragraph({
+              border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: azul } },
+              spacing: { after: 260 },
+              children: [new TextRun({ text: "Longitude Assessoria Rural e Urbano", bold: true, size: 20, color: verde })],
+            }),
+            tituloSecao("1. Identificação"),
+            tabelaResumo,
+            tituloSecao("2. Bases analisadas"),
+            p("Foram consideradas as feições carregadas/consultadas no sistema Longitude Geo Intelligence, incluindo base SIGEF local importada, CAR/SICAR consultado e demais perímetros disponíveis no momento da análise.", { size: 20 }),
+            tituloSecao("3. Síntese técnica"),
+            p(`Foram identificadas ${analiseSobreposicao.quantidade} sobreposição(ões), totalizando ${numeroBR(analiseSobreposicao.totalSobrepostoHa)} ha, equivalente a ${numeroBR(analiseSobreposicao.percentualTotal, 2)}% do perímetro analisado.`, { size: 20 }),
+          ],
+        },
+        {
+          properties: {
+            type: SectionType.NEXT_PAGE,
+            page: {
+              size: { orientation: PageOrientation.LANDSCAPE },
+              margin: { top: 540, right: 360, bottom: 540, left: 360 },
+            },
+          },
+          children: [
+            tituloSecao("4. Quadro de sobreposições identificadas"),
+            p("Tabela consolidada das feições interceptadas pelo perímetro analisado.", { size: 18, after: 100 }),
+            tabelaSobreposicoes,
+          ],
+        },
+        {
+          properties: {
+            type: SectionType.NEXT_PAGE,
+            page: {
+              margin: { top: 720, right: 720, bottom: 720, left: 720 },
+            },
+          },
+          children: [
+            tituloSecao("5. Conclusão técnica preliminar"),
+            p("Após o cruzamento espacial realizado, foram identificadas as sobreposições descritas no quadro acima. Este relatório possui caráter técnico preliminar e deve ser validado com conferência da origem, data de atualização das bases, sistema de referência geodésico e documentação dominial/cadastral do imóvel.", { size: 20 }),
+            p("Observação: o cálculo foi realizado em ambiente web com base nas geometrias carregadas no sistema. Para uso cartorial, judicial ou bancário, recomenda-se conferência em ambiente SIG profissional e emissão com assinatura técnica.", { size: 16, color: "475569", before: 160 }),
+            new Paragraph({ spacing: { before: 620, after: 40 }, children: [new TextRun({ text: "______________________________________________", size: 20 })] }),
+            p("Alexandre Magno Gomes de Lima", { bold: true, size: 20, after: 0 }),
+            p("Longitude Assessoria Rural e Urbano", { size: 18, after: 0 }),
+          ],
+        },
+      ],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    salvarBlob("Relatorio_Sobreposicao_Longitude.docx", blob);
   }
-
   function exportarConsultaGeoJSON() {
     if (!consultaGeojson?.features?.length) {
       alert("Não existe parcela consultada para exportar.");
