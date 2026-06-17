@@ -44,6 +44,27 @@ const CAMADAS_FUTURAS = [
 
 const STATUS_FUNDIARIO = ["SIGEF / INCRA", "CAR / SIMCAR", "INTERMAT", "SEMA-MT", "FUNAI", "IBAMA"];
 
+const CORES_SOBREPOSICAO = [
+  "#E11D48",
+  "#2563EB",
+  "#16A34A",
+  "#F97316",
+  "#7C3AED",
+  "#0891B2",
+  "#CA8A04",
+  "#DC2626",
+  "#059669",
+  "#4F46E5",
+];
+
+function corSobreposicao(indice) {
+  return CORES_SOBREPOSICAO[indice % CORES_SOBREPOSICAO.length];
+}
+
+function corDocx(hex) {
+  return String(hex || "#999999").replace("#", "").toUpperCase();
+}
+
 const SERVICOS_OFICIAIS = {
   sigef: "https://acervofundiario.incra.gov.br/",
   car: "https://www.car.gov.br/#/consultar",
@@ -194,11 +215,14 @@ export default function App() {
   const mapRef = useRef(null);
   const geoLayerRef = useRef(null);
   const consultaLayerRef = useRef(null);
+  const sobreposicaoLayerRef = useRef(null);
+  const legendaControlRef = useRef(null);
   const baseLayersRef = useRef({});
   const currentBaseLayerRef = useRef(null);
   const drawnItemsRef = useRef(null);
 
   const [tela, setTela] = useState("analise");
+  const [imovelAbertoId, setImovelAbertoId] = useState("");
   const [dados, setDados] = useState(carregarDados);
   const [areaHa, setAreaHa] = useState(null);
   const [arquivoNome, setArquivoNome] = useState("");
@@ -251,6 +275,8 @@ export default function App() {
 
     geoLayerRef.current = null;
     if (typeof consultaLayerRef !== "undefined") consultaLayerRef.current = null;
+    if (typeof sobreposicaoLayerRef !== "undefined") sobreposicaoLayerRef.current = null;
+    if (typeof legendaControlRef !== "undefined") legendaControlRef.current = null;
     drawnItemsRef.current = null;
     currentBaseLayerRef.current = null;
 
@@ -330,6 +356,10 @@ export default function App() {
       }).addTo(map);
       consultaLayerRef.current = layerConsulta;
       try { map.fitBounds(layerConsulta.getBounds(), { padding: [30, 30] }); } catch {}
+    }
+
+    if (analiseSobreposicao?.feicoesSobrepostas?.features?.length) {
+      desenharSobreposicoesNoMapa(analiseSobreposicao);
     }
 
     setTimeout(() => map.invalidateSize(), 150);
@@ -835,6 +865,90 @@ function normalizarComparacao(valor) {
     }
   }
 
+  function limparCamadasSobreposicao() {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (sobreposicaoLayerRef.current) {
+      map.removeLayer(sobreposicaoLayerRef.current);
+      sobreposicaoLayerRef.current = null;
+    }
+
+    if (legendaControlRef.current) {
+      map.removeControl(legendaControlRef.current);
+      legendaControlRef.current = null;
+    }
+  }
+
+  function desenharSobreposicoesNoMapa(resumo) {
+    const map = mapRef.current;
+    if (!map || !resumo?.feicoesSobrepostas?.features?.length) return;
+
+    limparCamadasSobreposicao();
+
+    const grupo = L.layerGroup().addTo(map);
+
+    L.geoJSON(resumo.feicoesSobrepostas, {
+      style: (feature) => {
+        const cor = feature?.properties?.cor || "#E11D48";
+        return {
+          color: cor,
+          weight: 2,
+          opacity: 0.95,
+          fillColor: cor,
+          fillOpacity: 0.22,
+        };
+      },
+      onEachFeature: (feature, camada) => {
+        const p = feature.properties || {};
+        camada.bindPopup(`
+          <strong>${p.origem || "Sobreposição"}</strong><br/>
+          <strong>Código:</strong> ${p.codigo || "-"}<br/>
+          <strong>Nome:</strong> ${p.nome || "-"}<br/>
+          <strong>Área sobreposta:</strong> ${p.area_sobreposta_ha || "-"} ha<br/>
+          <strong>Percentual:</strong> ${p.percentual_base || "-"}%
+        `);
+      },
+    }).addTo(grupo);
+
+    if (resumo.intersecoes?.features?.length) {
+      L.geoJSON(resumo.intersecoes, {
+        style: (feature) => {
+          const cor = feature?.properties?.cor || "#111827";
+          return {
+            color: cor,
+            weight: 4,
+            opacity: 1,
+            fillColor: cor,
+            fillOpacity: 0.48,
+          };
+        },
+      }).addTo(grupo);
+    }
+
+    sobreposicaoLayerRef.current = grupo;
+
+    const legenda = L.control({ position: "bottomleft" });
+    legenda.onAdd = () => {
+      const div = L.DomUtil.create("div", "leaflet-overlap-legend");
+      const itens = resumo.resultados.slice(0, 12).map((r, idx) => `
+        <div class="legend-item">
+          <span class="legend-color" style="background:${r.cor}"></span>
+          <span>${idx + 1}. ${r.origem} — ${String(r.nome || r.codigo || "-").slice(0, 32)}</span>
+        </div>
+      `).join("");
+      div.innerHTML = `<strong>Sobreposições</strong>${itens}`;
+      return div;
+    };
+    legenda.addTo(map);
+    legendaControlRef.current = legenda;
+
+    try {
+      const bounds = L.geoJSON(resumo.feicoesSobrepostas).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+    } catch {}
+  }
+
   function executarAnaliseSobreposicao() {
     const base = geojsonAtual;
     if (!base?.features?.length) {
@@ -870,6 +984,7 @@ function normalizarComparacao(valor) {
         const bboxBase = turf.bbox(base);
         const resultados = [];
         const geometriasIntersecao = [];
+        const feicoesSobrepostas = [];
 
         for (const item of candidatos) {
           const f = item.feature;
@@ -899,8 +1014,10 @@ function normalizarComparacao(valor) {
             const areaParcelaHa = turf.area(featureCollectionDeUma(f)) / 10000;
             const atributos = extrairAtributosParcela(f, item.origem);
 
-            resultados.push({
-              id: `${item.origem}-${resultados.length + 1}`,
+            const indiceResultado = resultados.length;
+            const cor = corSobreposicao(indiceResultado);
+            const resultadoItem = {
+              id: `${item.origem}-${indiceResultado + 1}`,
               origem: item.origem,
               codigo: atributos.codigo,
               sncr: atributos.sncr,
@@ -908,10 +1025,23 @@ function normalizarComparacao(valor) {
               matricula: atributos.matricula,
               municipio: atributos.municipio,
               status: atributos.status,
+              cor,
               areaParcelaHa: Number(areaParcelaHa.toFixed(4)),
               areaSobrepostaHa: Number(areaSobreposta.toFixed(4)),
               percentualSobreBase: Number(((areaSobreposta / areaBaseHa) * 100).toFixed(4)),
               percentualSobreParcela: areaParcelaHa > 0 ? Number(((areaSobreposta / areaParcelaHa) * 100).toFixed(4)) : 0,
+            };
+
+            resultados.push(resultadoItem);
+
+            feicoesSobrepostas.push({
+              type: "Feature",
+              geometry: f.geometry,
+              properties: {
+                ...resultadoItem,
+                area_sobreposta_ha: resultadoItem.areaSobrepostaHa,
+                percentual_base: resultadoItem.percentualSobreBase,
+              },
             });
 
             for (const geom of partesIntersecao) {
@@ -920,6 +1050,7 @@ function normalizarComparacao(valor) {
                 properties: {
                   origem: item.origem,
                   codigo: atributos.codigo,
+                  cor,
                   area_ha: Number(areaSobreposta.toFixed(4)),
                 },
               });
@@ -937,10 +1068,12 @@ function normalizarComparacao(valor) {
           percentualTotal: areaBaseHa > 0 ? Number(((totalSobreposto / areaBaseHa) * 100).toFixed(4)) : 0,
           quantidade: resultados.length,
           resultados,
+          feicoesSobrepostas: { type: "FeatureCollection", features: feicoesSobrepostas },
           intersecoes: { type: "FeatureCollection", features: geometriasIntersecao },
         };
 
         setAnaliseSobreposicao(resumo);
+        desenharSobreposicoesNoMapa(resumo);
 
         if (resultados.length === 0) {
           setResultadoConsulta("Análise concluída: nenhuma sobreposição foi identificada com as bases carregadas.");
@@ -1046,8 +1179,9 @@ function normalizarComparacao(valor) {
     const linhas = analiseSobreposicao.resultados.map((r, i) => new TableRow({
       children: [
         celula(String(i + 1), { width: 4, align: AlignmentType.CENTER }),
+        celula("", { width: 4, fill: corDocx(r.cor), align: AlignmentType.CENTER }),
         celula(r.origem, { width: 9 }),
-        celula(r.codigo, { width: 20 }),
+        celula(r.codigo, { width: 16 }),
         celula(r.sncr, { width: 13 }),
         celula(r.nome, { width: 18 }),
         celula(r.matricula, { width: 8 }),
@@ -1058,6 +1192,29 @@ function normalizarComparacao(valor) {
       ],
     }));
 
+    const tabelaLegenda = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          tableHeader: true,
+          children: [
+            celula("Cor", { header: true, width: 10, align: AlignmentType.CENTER }),
+            celula("Origem", { header: true, width: 18 }),
+            celula("Código", { header: true, width: 34 }),
+            celula("Nome/Identificação", { header: true, width: 38 }),
+          ],
+        }),
+        ...analiseSobreposicao.resultados.map((r) => new TableRow({
+          children: [
+            celula("", { width: 10, fill: corDocx(r.cor), align: AlignmentType.CENTER }),
+            celula(r.origem, { width: 18, size: 16 }),
+            celula(r.codigo, { width: 34, size: 16 }),
+            celula(r.nome, { width: 38, size: 16 }),
+          ],
+        })),
+      ],
+    });
+
     const tabelaSobreposicoes = new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
@@ -1065,8 +1222,9 @@ function normalizarComparacao(valor) {
           tableHeader: true,
           children: [
             celula("#", { header: true, width: 4, align: AlignmentType.CENTER }),
+            celula("Cor", { header: true, width: 4, align: AlignmentType.CENTER }),
             celula("Origem", { header: true, width: 9 }),
-            celula("Código", { header: true, width: 20 }),
+            celula("Código", { header: true, width: 16 }),
             celula("SNCR/Cód. Imóvel", { header: true, width: 13 }),
             celula("Nome", { header: true, width: 18 }),
             celula("Matrícula", { header: true, width: 8 }),
@@ -1125,7 +1283,10 @@ function normalizarComparacao(valor) {
             },
           },
           children: [
-            tituloSecao("4. Quadro de sobreposições identificadas"),
+            tituloSecao("4. Legenda das feições sobrepostas"),
+            p("Cada feição interceptada recebeu uma cor opaca para identificação visual no mapa e no quadro técnico.", { size: 18, after: 100 }),
+            tabelaLegenda,
+            tituloSecao("5. Quadro de sobreposições identificadas"),
             p("Tabela consolidada das feições interceptadas pelo perímetro analisado.", { size: 18, after: 100 }),
             tabelaSobreposicoes,
           ],
@@ -1138,7 +1299,7 @@ function normalizarComparacao(valor) {
             },
           },
           children: [
-            tituloSecao("5. Conclusão técnica preliminar"),
+            tituloSecao("6. Conclusão técnica preliminar"),
             p("Após o cruzamento espacial realizado, foram identificadas as sobreposições descritas no quadro acima. Este relatório possui caráter técnico preliminar e deve ser validado com conferência da origem, data de atualização das bases, sistema de referência geodésico e documentação dominial/cadastral do imóvel.", { size: 20 }),
             p("Observação: o cálculo foi realizado em ambiente web com base nas geometrias carregadas no sistema. Para uso cartorial, judicial ou bancário, recomenda-se conferência em ambiente SIG profissional e emissão com assinatura técnica.", { size: 16, color: "475569", before: 160 }),
             new Paragraph({ spacing: { before: 620, after: 40 }, children: [new TextRun({ text: "______________________________________________", size: 20 })] }),
@@ -1455,6 +1616,41 @@ R$ ${propostaForm.valor || "A definir"}`;
     salvarArquivo("proposta-longitude-geo.txt", texto);
   }
 
+  function abrirImovel(imovelId) {
+    setImovelAbertoId(imovelId);
+    setTela("imovelDetalhe");
+  }
+
+  function voltarParaImoveis() {
+    setImovelAbertoId("");
+    setTela("imoveis");
+  }
+
+  function obterImovelAberto() {
+    return dados.imoveis.find((i) => i.id === imovelAbertoId) || null;
+  }
+
+  function obterAnalisesDoImovel(imovelId) {
+    return dados.analises.filter((a) => a.imovelId === imovelId);
+  }
+
+  function abrirAnaliseSalva(analiseId) {
+    const analise = dados.analises.find((a) => a.id === analiseId);
+    if (!analise) {
+      alert("Análise não encontrada.");
+      return;
+    }
+    if (analise.geojson) {
+      aplicarPerimetroAtual(analise.geojson, analise.arquivoNome || "analise-salva.geojson", `Análise salva reaberta: ${analise.nomeImovel || "imóvel"}`);
+    }
+    setTela("analise");
+  }
+
+  function excluirAnalise(analiseId) {
+    if (!confirm("Deseja excluir esta análise salva?")) return;
+    setDados((d) => ({ ...d, analises: d.analises.filter((a) => a.id !== analiseId) }));
+  }
+
   function limparBase() {
     if (!confirm("Tem certeza que deseja apagar todos os dados salvos neste navegador?")) return;
     setDados(initialData);
@@ -1599,16 +1795,62 @@ R$ ${propostaForm.valor || "A definir"}`;
           <section className="page">
             <div className="panel">
               <h3>Imóveis cadastrados</h3>
-              {dados.imoveis.length === 0 ? <p className="muted">Nenhum imóvel salvo ainda.</p> : dados.imoveis.map((i) => (
-                <div className="list-item" key={i.id}>
-                  <strong>{i.nome}</strong>
-                  <span>{i.municipio || "Município não informado"} • {Number(i.areaHa).toLocaleString("pt-BR")} ha</span>
-                  <small>Matrícula: {i.matricula || "não informada"} | CAR: {i.car || "não informado"} | SIGEF: {i.sigef || "não informado"}</small>
-                </div>
-              ))}
+              {dados.imoveis.length === 0 ? (
+                <p className="muted">Nenhum imóvel salvo ainda.</p>
+              ) : (
+                dados.imoveis.map((i) => {
+                  const totalAnalises = obterAnalisesDoImovel(i.id).length;
+                  return (
+                    <div className="list-item imovel-card" key={i.id}>
+                      <div className="imovel-card-info">
+                        <strong>{i.nome}</strong>
+                        <span>{i.municipio || "Município não informado"} • {Number(i.areaHa || 0).toLocaleString("pt-BR")} ha</span>
+                        <small>Matrícula: {i.matricula || "não informada"} | CAR: {i.car || "não informado"} | SIGEF: {i.sigef || "não informado"}</small>
+                        <small>Histórico: {totalAnalises} análise(s) salva(s)</small>
+                      </div>
+                      <div className="imovel-card-actions">
+                        <button className="primary-button" type="button" onClick={() => abrirImovel(i.id)}>Abrir imóvel</button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </section>
         )}
+
+        {tela === "imovelDetalhe" && (() => {
+          const imovel = obterImovelAberto();
+          const analisesImovel = imovel ? obterAnalisesDoImovel(imovel.id) : [];
+          if (!imovel) {
+            return <section className="page"><div className="panel"><h3>Imóvel não encontrado</h3><button className="primary-button" type="button" onClick={voltarParaImoveis}>Voltar</button></div></section>;
+          }
+          return (
+            <section className="page">
+              <div className="property-header">
+                <div>
+                  <button className="back-button" type="button" onClick={voltarParaImoveis}>← Voltar aos imóveis</button>
+                  <h3>{imovel.nome}</h3>
+                  <p>{imovel.municipio || "Município não informado"} • {Number(imovel.areaHa || 0).toLocaleString("pt-BR")} ha</p>
+                </div>
+                <button className="primary-button" type="button" onClick={() => setTela("analise")}>Nova análise</button>
+              </div>
+              <div className="property-grid">
+                <div className="panel"><h3>Dados gerais</h3><div className="data-grid">
+                  <span>Matrícula</span><strong>{imovel.matricula || "Não informada"}</strong>
+                  <span>CAR/SIMCAR</span><strong>{imovel.car || "Não informado"}</strong>
+                  <span>SIGEF</span><strong>{imovel.sigef || "Não informado"}</strong>
+                  <span>Área</span><strong>{Number(imovel.areaHa || 0).toLocaleString("pt-BR")} ha</strong>
+                  <span>Data de cadastro</span><strong>{imovel.criadoEm || "-"}</strong>
+                  <span>Observações</span><strong>{imovel.observacoes || "Sem observações"}</strong>
+                </div></div>
+                <div className="panel"><h3>Resumo</h3><div className="cards-grid compact"><Metric label="Análises" value={analisesImovel.length} /><Metric label="Área" value={`${Number(imovel.areaHa || 0).toLocaleString("pt-BR")} ha`} /></div></div>
+              </div>
+              <div className="panel"><h3>Histórico de análises</h3>{analisesImovel.length === 0 ? <p className="muted">Nenhuma análise salva para este imóvel.</p> : <div className="analysis-history"><div className="analysis-head"><span>Data</span><span>Status</span><span>Área</span><span>Arquivo</span><span>Ações</span></div>{analisesImovel.map((a) => <div className="analysis-row" key={a.id}><span>{a.criadoEm}</span><span>{a.status || "Preliminar"}</span><span>{Number(a.areaHa || 0).toLocaleString("pt-BR")} ha</span><span>{a.arquivoNome || "sem arquivo"}</span><span className="row-actions"><button type="button" onClick={() => abrirAnaliseSalva(a.id)}>Abrir mapa</button><button type="button" onClick={() => baixarRelatorio(a)}>Relatório</button><button type="button" className="danger-mini" onClick={() => excluirAnalise(a.id)}>Excluir</button></span></div>)}</div>}</div>
+              <div className="panel"><h3>Módulos do imóvel</h3><div className="module-pills"><span>📂 Documentos</span><span>🗺️ Mapas</span><span>📄 Relatórios</span><span>💰 Propostas</span><span>✅ Pendências</span></div></div>
+            </section>
+          );
+        })()}
 
         {tela === "integracoes" && (
           <section className="page online-layout">
@@ -1683,9 +1925,10 @@ R$ ${propostaForm.valor || "A definir"}`;
                     <span>Área sobreposta: {numeroBR(analiseSobreposicao.totalSobrepostoHa)} ha</span>
                     <span>Percentual: {numeroBR(analiseSobreposicao.percentualTotal, 2)}%</span>
                     <div className="mini-table">
-                      <div className="mini-head"><span>Origem</span><span>Código</span><span>Nome</span><span>Sobrep. ha</span><span>%</span></div>
+                      <div className="mini-head"><span>Cor</span><span>Origem</span><span>Código</span><span>Nome</span><span>Sobrep. ha</span><span>%</span></div>
                       {analiseSobreposicao.resultados.slice(0, 20).map((r) => (
                         <div className="mini-row" key={r.id}>
+                          <span><i className="color-chip" style={{ background: r.cor }}></i></span>
                           <span>{r.origem}</span>
                           <span>{r.codigo}</span>
                           <span>{r.nome}</span>
@@ -1789,6 +2032,7 @@ function tituloTela(tela) {
     analise: "Análise Territorial",
     clientes: "Clientes",
     imoveis: "Imóveis",
+    imovelDetalhe: "Detalhe do Imóvel",
     integracoes: "SIGEF / CAR / INTERMAT",
     relatorios: "Relatórios",
     propostas: "Propostas",
