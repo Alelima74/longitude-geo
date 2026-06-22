@@ -3,6 +3,7 @@ import L from "leaflet";
 import "leaflet-draw";
 import * as toGeoJSON from "@tmcw/togeojson";
 import * as turf from "@turf/turf";
+import html2canvas from "html2canvas";
 import * as shpwrite from "@mapbox/shp-write";
 import logoLongitude from "./assets/logo-longitude.png";
 import {
@@ -211,11 +212,43 @@ ${placemarks}
 </kml>`;
 }
 
+
+function normalizarCodigoIncra(valor) {
+  const limpo = String(valor || "").replace(/\D/g, "");
+  if (limpo.length === 13) {
+    return `${limpo.slice(0, 3)}.${limpo.slice(3, 6)}.${limpo.slice(6, 9)}.${limpo.slice(9, 12)}-${limpo.slice(12)}`;
+  }
+  return String(valor || "").trim();
+}
+
+function somenteDigitos(valor) {
+  return String(valor || "").replace(/\D/g, "");
+}
+
+function obterValorPossivel(props, nomes) {
+  for (const nome of nomes) {
+    if (props && props[nome] !== undefined && props[nome] !== null && String(props[nome]).trim() !== "") {
+      return props[nome];
+    }
+  }
+  return "";
+}
+
+function dataUrlParaUint8Array(dataUrl) {
+  const base64 = String(dataUrl || "").split(",")[1] || "";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 export default function App() {
   const mapRef = useRef(null);
   const geoLayerRef = useRef(null);
   const consultaLayerRef = useRef(null);
   const sobreposicaoLayerRef = useRef(null);
+  const previewSigefLayerRef = useRef(null);
+  const previewCarLayerRef = useRef(null);
   const legendaControlRef = useRef(null);
   const baseLayersRef = useRef({});
   const currentBaseLayerRef = useRef(null);
@@ -244,6 +277,8 @@ export default function App() {
   const [resultadoConsulta, setResultadoConsulta] = useState("");
   const [diagnosticoOnline, setDiagnosticoOnline] = useState("");
   const [consultaGeojson, setConsultaGeojson] = useState(null);
+  const [mostrarPreviewSigef, setMostrarPreviewSigef] = useState(false);
+  const [mostrarPreviewCar, setMostrarPreviewCar] = useState(false);
   const [sigefLocalGeojson, setSigefLocalGeojson] = useState(null);
   const [sigefLocalNome, setSigefLocalNome] = useState("");
   const [sigefLocalInfo, setSigefLocalInfo] = useState("");
@@ -276,6 +311,8 @@ export default function App() {
     geoLayerRef.current = null;
     if (typeof consultaLayerRef !== "undefined") consultaLayerRef.current = null;
     if (typeof sobreposicaoLayerRef !== "undefined") sobreposicaoLayerRef.current = null;
+    if (typeof previewSigefLayerRef !== "undefined") previewSigefLayerRef.current = null;
+    if (typeof previewCarLayerRef !== "undefined") previewCarLayerRef.current = null;
     if (typeof legendaControlRef !== "undefined") legendaControlRef.current = null;
     drawnItemsRef.current = null;
     currentBaseLayerRef.current = null;
@@ -286,11 +323,13 @@ export default function App() {
     const mapaPadrao = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap",
       maxZoom: 20,
+      crossOrigin: true,
     });
 
     const mapaSatelite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       attribution: "Tiles © Esri",
       maxZoom: 20,
+      crossOrigin: true,
     });
 
     baseLayersRef.current = { padrao: mapaPadrao, satelite: mapaSatelite };
@@ -647,6 +686,8 @@ function normalizarComparacao(valor) {
     const codigoDigitado = consultaForm.codigoSigef;
     const codigoUuid = limparUuidSigef(codigoDigitado);
     const codigoTexto = normalizarComparacao(codigoDigitado);
+    const codigoIncraMascarado = normalizarCodigoIncra(codigoDigitado);
+    const codigoIncraDigitos = somenteDigitos(codigoDigitado);
 
     if (!codigoUuid && !codigoTexto) {
       alert("Informe o código SIGEF, SNCR, matrícula ou nome da área.");
@@ -666,6 +707,7 @@ function normalizarComparacao(valor) {
 
       const parcela = limparUuidSigef(resumo.parcela_co);
       const codigoImo = limparUuidSigef(resumo.codigo_imo);
+      const codigoImoDigitos = somenteDigitos(resumo.codigo_imo);
       const registroM = limparUuidSigef(resumo.registro_m);
       const nomeArea = normalizarComparacao(resumo.nome_area);
 
@@ -673,6 +715,8 @@ function normalizarComparacao(valor) {
 
       if (parcela && parcela === codigoUuid) bateu = true;
       if (!bateu && codigoImo && codigoImo === codigoUuid) bateu = true;
+      if (!bateu && codigoImoDigitos && codigoIncraDigitos && codigoImoDigitos === codigoIncraDigitos) bateu = true;
+      if (!bateu && codigoImo && codigoIncraMascarado && normalizarComparacao(codigoImo) === normalizarComparacao(codigoIncraMascarado)) bateu = true;
       if (!bateu && registroM && registroM === codigoUuid) bateu = true;
       if (!bateu && codigoTexto && nomeArea && nomeArea.includes(codigoTexto)) bateu = true;
 
@@ -680,7 +724,9 @@ function normalizarComparacao(valor) {
         for (const valor of Object.values(props)) {
           const vUuid = limparUuidSigef(valor);
           const vTexto = normalizarComparacao(valor);
+          const vDigitos = somenteDigitos(valor);
           if (vUuid && vUuid === codigoUuid) { bateu = true; break; }
+          if (codigoIncraDigitos && vDigitos && vDigitos === codigoIncraDigitos) { bateu = true; break; }
           if (codigoTexto && vTexto && vTexto.includes(codigoTexto)) { bateu = true; break; }
         }
       }
@@ -1110,6 +1156,8 @@ function normalizarComparacao(valor) {
     }
 
     const logoBytes = await logoComoBytes();
+    const mapaRelatorioDataUrl = await capturarMapaComoImagem();
+    const mapaRelatorioBytes = mapaRelatorioDataUrl ? dataUrlParaUint8Array(mapaRelatorioDataUrl) : null;
 
     const azul = "003B5C";
     const verde = "3D8B37";
@@ -1272,6 +1320,15 @@ function normalizarComparacao(valor) {
             p("Foram consideradas as feições carregadas/consultadas no sistema Longitude Geo Intelligence, incluindo base SIGEF local importada, CAR/SICAR consultado e demais perímetros disponíveis no momento da análise.", { size: 20 }),
             tituloSecao("3. Síntese técnica"),
             p(`Foram identificadas ${analiseSobreposicao.quantidade} sobreposição(ões), totalizando ${numeroBR(analiseSobreposicao.totalSobrepostoHa)} ha, equivalente a ${numeroBR(analiseSobreposicao.percentualTotal, 2)}% do perímetro analisado.`, { size: 20 }),
+            tituloSecao("4. Mapa da análise de sobreposição"),
+            ...(mapaRelatorioBytes ? [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 80, after: 80 },
+                children: [new ImageRun({ data: mapaRelatorioBytes, transformation: { width: 610, height: 410 } })],
+              }),
+              p("Figura 01 – Visualização cartográfica das feições sobrepostas ao perímetro analisado. As cores correspondem à legenda técnica apresentada na seção seguinte.", { size: 16, color: "475569", alignment: AlignmentType.CENTER }),
+            ] : [p("Mapa não foi capturado automaticamente. Gere o relatório a partir da tela de mapa após executar a análise de sobreposição.", { size: 16, color: "B91C1C" })]),
           ],
         },
         {
@@ -1283,10 +1340,10 @@ function normalizarComparacao(valor) {
             },
           },
           children: [
-            tituloSecao("4. Legenda das feições sobrepostas"),
+            tituloSecao("5. Legenda das feições sobrepostas"),
             p("Cada feição interceptada recebeu uma cor opaca para identificação visual no mapa e no quadro técnico.", { size: 18, after: 100 }),
             tabelaLegenda,
-            tituloSecao("5. Quadro de sobreposições identificadas"),
+            tituloSecao("6. Quadro de sobreposições identificadas"),
             p("Tabela consolidada das feições interceptadas pelo perímetro analisado.", { size: 18, after: 100 }),
             tabelaSobreposicoes,
           ],
@@ -1299,7 +1356,7 @@ function normalizarComparacao(valor) {
             },
           },
           children: [
-            tituloSecao("6. Conclusão técnica preliminar"),
+            tituloSecao("7. Conclusão técnica preliminar"),
             p("Após o cruzamento espacial realizado, foram identificadas as sobreposições descritas no quadro acima. Este relatório possui caráter técnico preliminar e deve ser validado com conferência da origem, data de atualização das bases, sistema de referência geodésico e documentação dominial/cadastral do imóvel.", { size: 20 }),
             p("Observação: o cálculo foi realizado em ambiente web com base nas geometrias carregadas no sistema. Para uso cartorial, judicial ou bancário, recomenda-se conferência em ambiente SIG profissional e emissão com assinatura técnica.", { size: 16, color: "475569", before: 160 }),
             new Paragraph({ spacing: { before: 620, after: 40 }, children: [new TextRun({ text: "______________________________________________", size: 20 })] }),
@@ -1355,6 +1412,113 @@ function normalizarComparacao(valor) {
       console.error(error);
       alert("Erro ao exportar Shapefile. Tente exportar em GeoJSON ou KML.");
     }
+  }
+
+  async function capturarMapaComoImagem() {
+    try {
+      const mapElement = document.getElementById("map");
+      if (!mapElement) return null;
+
+      if (mapRef.current) {
+        mapRef.current.invalidateSize();
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      const canvas = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: "#ffffff",
+        scale: 1.4,
+        logging: false,
+      });
+
+      return canvas.toDataURL("image/png");
+    } catch (error) {
+      console.error("Erro ao capturar mapa para relatório", error);
+      return null;
+    }
+  }
+
+  function desenharPreviewSigef() {
+    const map = mapRef.current;
+    if (!map || !sigefLocalGeojson?.features?.length || !geojsonAtual) {
+      alert("Para pré-visualizar SIGEF, importe a base SIGEF local e carregue/desenhe um perímetro primeiro.");
+      return;
+    }
+
+    if (previewSigefLayerRef.current) {
+      map.removeLayer(previewSigefLayerRef.current);
+      previewSigefLayerRef.current = null;
+      setMostrarPreviewSigef(false);
+      return;
+    }
+
+    const baseBbox = turf.bbox(geojsonAtual);
+    const candidatos = [];
+
+    for (const feature of sigefLocalGeojson.features) {
+      if (!feature.geometry) continue;
+      try {
+        if (!bboxSobrepoe(baseBbox, turf.bbox(feature))) continue;
+        if (turf.booleanIntersects(geojsonAtual.features?.[0] || geojsonAtual, feature)) candidatos.push(feature);
+      } catch {}
+      if (candidatos.length >= 500) break;
+    }
+
+    const fc = { type: "FeatureCollection", features: candidatos };
+
+    const layer = L.geoJSON(fc, {
+      style: {
+        color: "#16a34a",
+        weight: 2,
+        fillColor: "#16a34a",
+        fillOpacity: 0.16,
+      },
+      onEachFeature: (feature, camada) => {
+        const p = feature.properties || {};
+        const cod = obterValorPossivel(p, ["parcela_co", "PARCELA_CO", "codigo_imo", "CODIGO_IMO"]);
+        const nome = obterValorPossivel(p, ["nome_area", "NOME_AREA", "nome_imove", "NOME_IMOVE"]);
+        camada.bindPopup(`<strong>SIGEF local</strong><br/>${nome || ""}<br/>${cod || ""}`);
+      },
+    }).addTo(map);
+
+    previewSigefLayerRef.current = layer;
+    setMostrarPreviewSigef(true);
+
+    if (!candidatos.length) alert("Nenhuma parcela SIGEF intersectando o perímetro atual foi encontrada na pré-visualização.");
+  }
+
+  function desenharPreviewCar() {
+    const map = mapRef.current;
+    if (!map || !consultaGeojson?.features?.length) {
+      alert("Para pré-visualizar CAR, carregue primeiro uma feição CAR/SICAR consultada.");
+      return;
+    }
+
+    if (previewCarLayerRef.current) {
+      map.removeLayer(previewCarLayerRef.current);
+      previewCarLayerRef.current = null;
+      setMostrarPreviewCar(false);
+      return;
+    }
+
+    const layer = L.geoJSON(consultaGeojson, {
+      style: {
+        color: "#2563eb",
+        weight: 3,
+        fillColor: "#2563eb",
+        fillOpacity: 0.16,
+      },
+      onEachFeature: (feature, camada) => {
+        const p = feature.properties || {};
+        const cod = obterValorPossivel(p, ["cod_imovel", "COD_IMOVEL", "codigo", "CODIGO", "cod_car", "COD_CAR"]);
+        camada.bindPopup(`<strong>CAR/SICAR</strong><br/>${cod || "Feição consultada"}`);
+      },
+    }).addTo(map);
+
+    previewCarLayerRef.current = layer;
+    setMostrarPreviewCar(true);
   }
 
   function usarConsultaComoPerimetroAtual() {
@@ -1908,6 +2072,19 @@ R$ ${propostaForm.valor || "A definir"}`;
               <div className="online-actions">
                 <button className="primary-button" type="button" onClick={usarConsultaComoPerimetroAtual}>Usar feição como perímetro atual</button>
                 <button className="secondary-action" type="button" onClick={baixarRelatorioSobreposicao}>Baixar relatório de sobreposição</button>
+              </div>
+
+              <div className="preview-card">
+                <h4>Pré-visualização de parcelas</h4>
+                <p className="muted">Ligue/desligue as camadas para avaliar visualmente sobreposição com KML, desenho ou GeoJSON importado.</p>
+                <div className="preview-buttons">
+                  <button type="button" className={mostrarPreviewSigef ? "selected" : ""} onClick={desenharPreviewSigef}>
+                    {mostrarPreviewSigef ? "Desligar SIGEF local" : "Ligar SIGEF local"}
+                  </button>
+                  <button type="button" className={mostrarPreviewCar ? "selected" : ""} onClick={desenharPreviewCar}>
+                    {mostrarPreviewCar ? "Desligar CAR" : "Ligar CAR"}
+                  </button>
+                </div>
               </div>
 
               <div className="analysis-card">

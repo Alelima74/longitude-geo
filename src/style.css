@@ -828,3 +828,47 @@ button, input, select, textarea { font: inherit; }
 .module-pills { display:flex; gap:10px; flex-wrap:wrap; }
 .module-pills span { border:1px solid var(--line); background:rgba(6,20,13,.72); color:var(--muted); border-radius:999px; padding:10px 14px; font-weight:800; }
 @media (max-width:1100px) { .property-header,.imovel-card { flex-direction:column; align-items:flex-start; } .property-grid{grid-template-columns:1fr;} .analysis-head,.analysis-row{grid-template-columns:1fr;} .row-actions{flex-direction:column;} .data-grid{grid-template-columns:1fr;} .mini-head,.mini-row{grid-template-columns:1fr !important;} }
+
+
+.preview-card {
+  border: 1px solid var(--line);
+  background: rgba(6, 20, 13, 0.72);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.preview-card h4 {
+  color: var(--gold);
+  margin: 0;
+}
+
+.preview-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.preview-buttons button {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #06140d;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.preview-buttons button.selected {
+  background: var(--gold);
+  color: #06140d;
+  border-color: var(--gold);
+}
+
+@media (max-width: 720px) {
+  .preview-buttons {
+    grid-template-columns: 1fr;
+  }
+}
