@@ -1,23 +1,32 @@
-# Longitude Geo Intelligence - MVP 2.2
+# Longitude Geo Intelligence - MVP 2.4
 
-## Implementações
+## Correção
 
-- Relatório Word cartográfico com mapa capturado da tela.
-- Legenda de cores no mapa e no relatório.
-- Cálculo técnico corrigido usando união geométrica das interseções.
-- Área sobreposta efetiva.
-- Área livre estimada.
-- Busca SIGEF local por código INCRA/SNCR com ou sem máscara `000.000.000.000-0`.
-- Botão: Relatório Word com mapa.
+O botão "Baixar relatório de sobreposição" ainda dependia do cruzamento antigo.
+Nesta versão, os relatórios passam a usar também a análise automática criada quando o KML é carregado.
+
+## Agora funciona assim
+
+1. Carrega KML/GeoJSON.
+2. Sistema busca CAR online pelo entorno e cruza SIGEF local, se importado.
+3. Sistema desenha as feições próximas/sobrepostas.
+4. Botão "Baixar relatório de sobreposição" usa esse resultado automático.
+5. Botão "Relatório Word com mapa" também usa esse resultado automático.
 
 ## Atualizar
 
 ```cmd
-xcopy D:\COMPARTILHAMENTO\longitude-geo-mvp-v22\longitude-geo-mvp-v22\* D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14\ /E /Y
+xcopy D:\COMPARTILHAMENTO\longitude-geo-mvp-v24\longitude-geo-mvp-v24\* D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14\ /E /Y
 cd D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14
 npm install
 npm run build
+npm run dev
+```
+
+Se passar no teste local:
+
+```cmd
 git add .
-git commit -m "Adicionar relatorio cartografico v22"
+git commit -m "Corrigir relatorio para analise automatica"
 git push
 ```

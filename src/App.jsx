@@ -242,10 +242,48 @@ function dataUrlParaUint8Array(dataUrl) {
   return bytes;
 }
 
+
+function bboxComFolga(geojson, margemPercentual = 0.08) {
+  const [minX, minY, maxX, maxY] = turf.bbox(geojson);
+  const dx = Math.max((maxX - minX) * margemPercentual, 0.01);
+  const dy = Math.max((maxY - minY) * margemPercentual, 0.01);
+  return [minX - dx, minY - dy, maxX + dx, maxY + dy];
+}
+
+function detectarUfPorCentroide(geojson) {
+  try {
+    const c = turf.centroid(geojson).geometry.coordinates;
+    const lng = c[0];
+    const lat = c[1];
+
+    // Regra prática para MT no MVP. Mantém estrutura para futuras UFs.
+    if (lng <= -50 && lng >= -62 && lat <= -7 && lat >= -19) return "mt";
+    return "mt";
+  } catch {
+    return "mt";
+  }
+}
+
+function montarResumoFeicaoAuto(feature, origem, indice) {
+  const p = feature.properties || {};
+  return {
+    indice,
+    origem,
+    codigo: obterValorPossivel(p, ["parcela_co", "PARCELA_CO", "cod_imovel", "COD_IMOVEL", "codigo_imo", "CODIGO_IMO", "cod_car", "COD_CAR", "codigo", "CODIGO"]) || "-",
+    nome: obterValorPossivel(p, ["nome_area", "NOME_AREA", "nome", "NOME", "nom_imovel", "NOM_IMOVEL"]) || "-",
+    sncr: obterValorPossivel(p, ["codigo_imo", "CODIGO_IMO", "cod_imovel", "COD_IMOVEL", "sncr", "SNCR"]) || "-",
+    matricula: obterValorPossivel(p, ["registro_m", "REGISTRO_M", "matricula", "MATRICULA"]) || "-",
+    municipio: obterValorPossivel(p, ["municipio_", "MUNICIPIO_", "municipio", "MUNICIPIO", "nom_munici", "NOM_MUNICI"]) || "-",
+    status: obterValorPossivel(p, ["status", "STATUS", "situacao_i", "SITUACAO_I"]) || "-",
+  };
+}
+
 export default function App() {
   const mapRef = useRef(null);
   const geoLayerRef = useRef(null);
   const consultaLayerRef = useRef(null);
+  const autoCarLayerRef = useRef(null);
+  const autoSigefLayerRef = useRef(null);
   const overlapLayerRef = useRef(null);
   const mapLegendControlRef = useRef(null);
   const sobreposicaoLayerRef = useRef(null);
@@ -263,6 +301,11 @@ export default function App() {
   const [arquivoNome, setArquivoNome] = useState("");
   const [geojsonAtual, setGeojsonAtual] = useState(null);
   const [diagnostico, setDiagnostico] = useState("Aguardando envio de arquivo KML.");
+  const [autoAnaliseStatus, setAutoAnaliseStatus] = useState("");
+  const [autoCarGeojson, setAutoCarGeojson] = useState(null);
+  const [autoSigefGeojson, setAutoSigefGeojson] = useState(null);
+  const [autoResumo, setAutoResumo] = useState(null);
+  const [autoCamadas, setAutoCamadas] = useState({ car: true, sigef: true });
   const [mapaBase, setMapaBase] = useState("padrao");
 
   const [clienteForm, setClienteForm] = useState({ nome: "", documento: "", telefone: "", email: "" });
@@ -483,6 +526,10 @@ export default function App() {
     setAreaHa(Number(hectares.toFixed(4)));
     setArquivoNome(nomeArquivo);
     setDiagnostico(mensagem);
+
+    setTimeout(() => {
+      executarAnaliseAutomaticaDoPerimetro(geojson);
+    }, 250);
   }
 
   function desenharCamadaConsulta(geojson, origem) {
@@ -1758,8 +1805,10 @@ function normalizarComparacao(valor) {
   }
 
   function baixarRelatorioSobreposicao() {
-    if (!ultimoCruzamento) {
-      alert("Ainda não existe cruzamento calculado.");
+    const cruzamentoDisponivel = garantirCruzamentoParaRelatorio();
+
+    if (!cruzamentoDisponivel) {
+      alert("Ainda não existe cruzamento calculado. Carregue um KML/perímetro e aguarde a análise automática, ou clique em Reanalisar perímetro.");
       return;
     }
 
@@ -1767,14 +1816,14 @@ function normalizarComparacao(valor) {
 
 Data: ${hojeBR()}
 
-Origem da feição consultada: ${ultimoCruzamento.origem}
+Origem da feição consultada: ${c.origem}
 
-Área do perímetro base: ${ultimoCruzamento.areaBase.toLocaleString("pt-BR")} ha
-Área da feição consultada: ${ultimoCruzamento.areaConsulta.toLocaleString("pt-BR")} ha
-Área de sobreposição: ${ultimoCruzamento.areaIntersecao.toLocaleString("pt-BR")} ha
+Área do perímetro base: ${c.areaBase.toLocaleString("pt-BR")} ha
+Área da feição consultada: ${c.areaConsulta.toLocaleString("pt-BR")} ha
+Área de sobreposição: ${c.areaIntersecao.toLocaleString("pt-BR")} ha
 
-Percentual sobre o perímetro base: ${ultimoCruzamento.percentualBase.toLocaleString("pt-BR")}%
-Percentual sobre a feição consultada: ${ultimoCruzamento.percentualConsulta.toLocaleString("pt-BR")}%
+Percentual sobre o perímetro base: ${c.percentualBase.toLocaleString("pt-BR")}%
+Percentual sobre a feição consultada: ${c.percentualConsulta.toLocaleString("pt-BR")}%
 
 Observação:
 Este cálculo é preliminar e depende da qualidade da geometria consultada e do perímetro base utilizado.`;
@@ -1863,6 +1912,370 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
       }
     };
     leitor.readAsText(arquivo);
+  }
+
+
+
+  function montarResultadoAutomaticoParaRelatorio() {
+    const features = [
+      ...(autoCarGeojson?.features || []),
+      ...(autoSigefGeojson?.features || [])
+    ].filter((f) => f?.properties?.__sobrepoe);
+
+    if (!geojsonAtual?.features?.length || features.length === 0) return null;
+
+    const intersecoes = [];
+
+    for (let i = 0; i < features.length; i++) {
+      const feature = features[i];
+
+      try {
+        let inter = null;
+        try {
+          inter = turf.intersect(turf.featureCollection([geojsonAtual.features[0], feature]));
+        } catch {
+          inter = turf.intersect(geojsonAtual.features[0], feature);
+        }
+
+        if (!inter?.geometry) continue;
+
+        const areaHa = turf.area(inter) / 10000;
+        const p = feature.properties || {};
+        const cor = p.__cor || corSobreposicao(i);
+
+        inter.properties = {
+          ...p,
+          __origem: p.__origem || "ANÁLISE AUTOMÁTICA",
+          __codigo: p.__codigo || "-",
+          __nome: p.__nome || "-",
+          __sncr: p.__sncr || "-",
+          __matricula: p.__matricula || "-",
+          __municipio: p.__municipio || "-",
+          __status: p.__status || "-",
+          __areaSobrepostaHa: Number(areaHa.toFixed(4)),
+          __cor: cor,
+        };
+
+        intersecoes.push(inter);
+      } catch (error) {
+        console.warn("Falha ao montar interseção automática para relatório", error);
+      }
+    }
+
+    if (intersecoes.length === 0) return null;
+
+    const areaBaseHa = turf.area(geojsonAtual) / 10000;
+    const areaSomadaHa = intersecoes.reduce((soma, f) => soma + (f.properties.__areaSobrepostaHa || 0), 0);
+
+    let areaUniaoHa = 0;
+    let uniaoGeom = null;
+
+    for (const inter of intersecoes) {
+      try {
+        if (!uniaoGeom) {
+          uniaoGeom = inter;
+        } else {
+          uniaoGeom = turf.union(turf.featureCollection([uniaoGeom, inter]));
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    if (uniaoGeom) {
+      areaUniaoHa = turf.area(uniaoGeom) / 10000;
+    } else {
+      areaUniaoHa = Math.min(areaSomadaHa, areaBaseHa);
+    }
+
+    return {
+      areaBaseHa: Number(areaBaseHa.toFixed(4)),
+      areaSobrepostaSomadaHa: Number(areaSomadaHa.toFixed(4)),
+      areaSobrepostaUniaoHa: Number(areaUniaoHa.toFixed(4)),
+      areaLivreHa: Number(Math.max(areaBaseHa - areaUniaoHa, 0).toFixed(4)),
+      percentualSobreposto: Number(((areaUniaoHa / areaBaseHa) * 100).toFixed(2)),
+      quantidade: intersecoes.length,
+      intersecoes: {
+        type: "FeatureCollection",
+        features: intersecoes
+      },
+      uniao: uniaoGeom || null
+    };
+  }
+
+  function garantirCruzamentoParaRelatorio() {
+    if (resultadoSobreposicaoDetalhado?.intersecoes?.features?.length) {
+      return resultadoSobreposicaoDetalhado;
+    }
+
+    const automatico = montarResultadoAutomaticoParaRelatorio();
+
+    if (automatico) {
+      setResultadoSobreposicaoDetalhado(automatico);
+      setUltimoCruzamento({
+        origem: "Análise automática CAR/SIGEF",
+        areaBase: automatico.areaBaseHa,
+        areaConsulta: automatico.areaSobrepostaSomadaHa,
+        areaIntersecao: automatico.areaSobrepostaUniaoHa,
+        percentualBase: automatico.percentualSobreposto,
+        percentualConsulta: 0,
+      });
+
+      if (typeof desenharSobreposicoesDetalhadas === "function") {
+        desenharSobreposicoesDetalhadas(automatico);
+      }
+
+      return automatico;
+    }
+
+    if (ultimoCruzamento) {
+      return ultimoCruzamento;
+    }
+
+    return null;
+  }
+
+  function limparCamadasAutomaticas() {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (autoCarLayerRef.current) {
+      map.removeLayer(autoCarLayerRef.current);
+      autoCarLayerRef.current = null;
+    }
+
+    if (autoSigefLayerRef.current) {
+      map.removeLayer(autoSigefLayerRef.current);
+      autoSigefLayerRef.current = null;
+    }
+  }
+
+  function desenharCamadaAutomatica(geojson, origem) {
+    const map = mapRef.current;
+    if (!map || !geojson?.features?.length) return;
+
+    const isCar = origem === "CAR";
+    const ref = isCar ? autoCarLayerRef : autoSigefLayerRef;
+
+    if (ref.current) {
+      map.removeLayer(ref.current);
+      ref.current = null;
+    }
+
+    const cor = isCar ? "#2563eb" : "#16a34a";
+
+    const layer = L.geoJSON(geojson, {
+      style: (feature) => ({
+        color: feature.properties?.__sobrepoe ? "#ef4444" : cor,
+        weight: feature.properties?.__sobrepoe ? 4 : 2,
+        fillColor: feature.properties?.__sobrepoe ? "#ef4444" : cor,
+        fillOpacity: feature.properties?.__sobrepoe ? 0.38 : 0.16,
+      }),
+      onEachFeature: (feature, camada) => {
+        const p = feature.properties || {};
+        camada.bindPopup(`
+          <strong>${origem}</strong><br/>
+          ${p.__nome || ""}<br/>
+          Código: ${p.__codigo || "-"}<br/>
+          Sobrepõe: ${p.__sobrepoe ? "SIM" : "NÃO"}<br/>
+          Área sobreposta: ${p.__areaSobrepostaHa || 0} ha
+        `);
+      },
+    }).addTo(map);
+
+    ref.current = layer;
+  }
+
+  async function buscarCarOnlinePorPerimetro(perimetro) {
+    const uf = detectarUfPorCentroide(perimetro);
+    const bbox = bboxComFolga(perimetro, 0.10);
+    const typeNames = [
+      `sicar:sicar_imoveis_${uf}`,
+      `sicar:imoveis_${uf}`,
+      `sicar:area_imovel_${uf}`,
+      `sicar:car_imoveis_${uf}`
+    ];
+
+    let ultimoErro = "";
+
+    for (const typeName of typeNames) {
+      try {
+        const params = new URLSearchParams({
+          service: "WFS",
+          version: "1.1.0",
+          request: "GetFeature",
+          typeName,
+          outputFormat: "application/json",
+          srsName: "EPSG:4326",
+          bbox: `${bbox[0]},${bbox[1]},${bbox[2]},${bbox[3]},EPSG:4326`,
+          maxFeatures: "250",
+        });
+
+        const resposta = await fetch(`${SERVICOS_OFICIAIS.carWfs}?${params.toString()}`);
+        if (!resposta.ok) {
+          ultimoErro = `${typeName}: HTTP ${resposta.status}`;
+          continue;
+        }
+
+        const geojson = await resposta.json();
+        if (geojson?.features?.length) {
+          return { geojson, camada: typeName };
+        }
+
+        ultimoErro = `${typeName}: 0 feições`;
+      } catch (error) {
+        ultimoErro = `${typeName}: ${error.message}`;
+      }
+    }
+
+    console.warn("CAR automático não retornou feições:", ultimoErro);
+    return { geojson: { type: "FeatureCollection", features: [] }, camada: "", erro: ultimoErro };
+  }
+
+  function cruzarFeicoesComPerimetro(perimetro, feicoes, origem) {
+    const resultado = [];
+    let idx = 0;
+
+    for (const feature of feicoes?.features || []) {
+      if (!feature.geometry) continue;
+
+      let sobrepoe = false;
+      let areaSobrepostaHa = 0;
+
+      try {
+        if (turf.booleanIntersects(perimetro, feature)) {
+          sobrepoe = true;
+          let inter = null;
+          try {
+            inter = turf.intersect(turf.featureCollection([perimetro.features?.[0] || perimetro, feature]));
+          } catch {
+            inter = turf.intersect(perimetro.features?.[0] || perimetro, feature);
+          }
+
+          if (inter) areaSobrepostaHa = turf.area(inter) / 10000;
+        }
+      } catch {}
+
+      const resumo = montarResumoFeicaoAuto(feature, origem, idx + 1);
+      resultado.push({
+        ...feature,
+        properties: {
+          ...(feature.properties || {}),
+          __origem: origem,
+          __codigo: resumo.codigo,
+          __nome: resumo.nome,
+          __sncr: resumo.sncr,
+          __matricula: resumo.matricula,
+          __municipio: resumo.municipio,
+          __status: resumo.status,
+          __sobrepoe: sobrepoe,
+          __areaSobrepostaHa: Number(areaSobrepostaHa.toFixed(4)),
+          __cor: sobrepoe ? corSobreposicao(idx) : undefined,
+        }
+      });
+      idx++;
+    }
+
+    return {
+      type: "FeatureCollection",
+      features: resultado
+    };
+  }
+
+  async function executarAnaliseAutomaticaDoPerimetro(perimetro = geojsonAtual) {
+    if (!perimetro?.features?.length) {
+      alert("Carregue primeiro um KML, Shape ou GeoJSON.");
+      return;
+    }
+
+    setAutoAnaliseStatus("Executando análise automática: buscando CAR online e cruzando SIGEF local...");
+    limparCamadasAutomaticas();
+
+    const resumo = {
+      carTotal: 0,
+      carSobrepostos: 0,
+      sigefTotal: 0,
+      sigefSobrepostos: 0,
+      carCamada: "",
+      erroCar: "",
+    };
+
+    try {
+      // 1. CAR online por BBOX
+      const car = await buscarCarOnlinePorPerimetro(perimetro);
+      resumo.carCamada = car.camada || "";
+      resumo.erroCar = car.erro || "";
+
+      const carCruzado = cruzarFeicoesComPerimetro(perimetro, car.geojson, "CAR");
+      resumo.carTotal = carCruzado.features.length;
+      resumo.carSobrepostos = carCruzado.features.filter((f) => f.properties.__sobrepoe).length;
+
+      setAutoCarGeojson(carCruzado);
+      if (autoCamadas.car && carCruzado.features.length) desenharCamadaAutomatica(carCruzado, "CAR");
+
+      // 2. SIGEF local, se houver base importada
+      let sigefCruzado = { type: "FeatureCollection", features: [] };
+
+      if (sigefLocalGeojson?.features?.length) {
+        const bbox = turf.bboxPolygon(bboxComFolga(perimetro, 0.10));
+        const candidatos = [];
+
+        for (const feature of sigefLocalGeojson.features) {
+          if (!feature.geometry) continue;
+          try {
+            if (turf.booleanIntersects(bbox, feature)) candidatos.push(feature);
+          } catch {}
+          if (candidatos.length >= 1000) break;
+        }
+
+        sigefCruzado = cruzarFeicoesComPerimetro(perimetro, { type: "FeatureCollection", features: candidatos }, "SIGEF LOCAL");
+      }
+
+      resumo.sigefTotal = sigefCruzado.features.length;
+      resumo.sigefSobrepostos = sigefCruzado.features.filter((f) => f.properties.__sobrepoe).length;
+
+      setAutoSigefGeojson(sigefCruzado);
+      if (autoCamadas.sigef && sigefCruzado.features.length) desenharCamadaAutomatica(sigefCruzado, "SIGEF");
+
+      setAutoResumo(resumo);
+
+      setAutoAnaliseStatus(
+        `Análise automática concluída. CAR: ${resumo.carSobrepostos}/${resumo.carTotal} sobrepostas. SIGEF: ${resumo.sigefSobrepostos}/${resumo.sigefTotal} sobrepostas.`
+      );
+    } catch (error) {
+      console.error(error);
+      setAutoAnaliseStatus(`Erro na análise automática: ${error.message}`);
+    }
+  }
+
+  function alternarCamadaAutomatica(tipo) {
+    if (tipo === "car") {
+      const novo = !autoCamadas.car;
+      setAutoCamadas((s) => ({ ...s, car: novo }));
+
+      if (!novo && autoCarLayerRef.current && mapRef.current) {
+        mapRef.current.removeLayer(autoCarLayerRef.current);
+        autoCarLayerRef.current = null;
+      }
+
+      if (novo && autoCarGeojson?.features?.length) {
+        desenharCamadaAutomatica(autoCarGeojson, "CAR");
+      }
+    }
+
+    if (tipo === "sigef") {
+      const novo = !autoCamadas.sigef;
+      setAutoCamadas((s) => ({ ...s, sigef: novo }));
+
+      if (!novo && autoSigefLayerRef.current && mapRef.current) {
+        mapRef.current.removeLayer(autoSigefLayerRef.current);
+        autoSigefLayerRef.current = null;
+      }
+
+      if (novo && autoSigefGeojson?.features?.length) {
+        desenharCamadaAutomatica(autoSigefGeojson, "SIGEF");
+      }
+    }
   }
 
   function limparPerimetroAtual() {
@@ -2045,8 +2458,21 @@ R$ ${propostaForm.valor || "A definir"}`;
 
 
   async function gerarRelatorioWordCartograficoV22() {
-    const resultado = resultadoSobreposicaoDetalhado || await recalcularSobreposicaoParaRelatorio();
-    if (!resultado) return;
+    let resultado = resultadoSobreposicaoDetalhado || montarResultadoAutomaticoParaRelatorio();
+
+    if (!resultado && geojsonAtual && consultaGeojson) {
+      resultado = await recalcularSobreposicaoParaRelatorio();
+    }
+
+    if (!resultado) {
+      alert("Não há sobreposição disponível para o relatório. Carregue o KML/perímetro, aguarde a análise automática ou clique em Reanalisar perímetro.");
+      return;
+    }
+
+    setResultadoSobreposicaoDetalhado(resultado);
+    if (typeof desenharSobreposicoesDetalhadas === "function") {
+      desenharSobreposicoesDetalhadas(resultado);
+    }
 
     const mapaDataUrl = mapaRelatorioDataUrl || await capturarMapaComoImagem();
 
@@ -2236,6 +2662,38 @@ R$ ${propostaForm.valor || "A definir"}`;
                 </div>
               </div>
 
+
+              <div className="auto-analysis-card">
+                <h3>Análise automática CAR/SIGEF</h3>
+                <p className="muted">
+                  Ao carregar KML/GeoJSON ou desenhar um perímetro, o sistema busca CAR online pelo entorno e cruza com a base SIGEF local importada.
+                </p>
+
+                <div className="auto-toggle-row">
+                  <button type="button" className={autoCamadas.car ? "selected" : ""} onClick={() => alternarCamadaAutomatica("car")}>
+                    {autoCamadas.car ? "CAR ligado" : "CAR desligado"}
+                  </button>
+                  <button type="button" className={autoCamadas.sigef ? "selected" : ""} onClick={() => alternarCamadaAutomatica("sigef")}>
+                    {autoCamadas.sigef ? "SIGEF ligado" : "SIGEF desligado"}
+                  </button>
+                </div>
+
+                <button className="primary-button" type="button" onClick={() => executarAnaliseAutomaticaDoPerimetro()}>
+                  Reanalisar perímetro
+                </button>
+
+                {autoAnaliseStatus && <pre className="result-box compact-result">{autoAnaliseStatus}</pre>}
+
+                {autoResumo && (
+                  <div className="auto-summary">
+                    <span>CAR próximos: <strong>{autoResumo.carTotal}</strong></span>
+                    <span>CAR sobrepostos: <strong>{autoResumo.carSobrepostos}</strong></span>
+                    <span>SIGEF próximos: <strong>{autoResumo.sigefTotal}</strong></span>
+                    <span>SIGEF sobrepostos: <strong>{autoResumo.sigefSobrepostos}</strong></span>
+                  </div>
+                )}
+              </div>
+
               <div className="tools-card">
                 <h3>Ferramentas do perímetro</h3>
                 <p>Use os ícones no canto superior esquerdo do mapa para desenhar polígono, linha ou retângulo.</p>
@@ -2409,6 +2867,7 @@ R$ ${propostaForm.valor || "A definir"}`;
                 <button className="primary-button" type="button" onClick={usarConsultaComoPerimetroAtual}>Usar feição como perímetro atual</button>
                 <button className="secondary-action" type="button" onClick={baixarRelatorioSobreposicao}>Baixar relatório de sobreposição</button>
                 <button className="secondary-action" type="button" onClick={gerarRelatorioWordCartograficoV22}>Relatório Word com mapa</button>
+                <small className="muted">Relatórios usam a análise automática CAR/SIGEF quando não houver consulta manual.</small>
               </div>
 
               <div className="preview-card">
