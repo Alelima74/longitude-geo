@@ -246,6 +246,8 @@ export default function App() {
   const mapRef = useRef(null);
   const geoLayerRef = useRef(null);
   const consultaLayerRef = useRef(null);
+  const overlapLayerRef = useRef(null);
+  const mapLegendControlRef = useRef(null);
   const sobreposicaoLayerRef = useRef(null);
   const previewSigefLayerRef = useRef(null);
   const previewCarLayerRef = useRef(null);
@@ -283,6 +285,8 @@ export default function App() {
   const [sigefLocalNome, setSigefLocalNome] = useState("");
   const [sigefLocalInfo, setSigefLocalInfo] = useState("");
   const [ultimoCruzamento, setUltimoCruzamento] = useState(null);
+  const [resultadoSobreposicaoDetalhado, setResultadoSobreposicaoDetalhado] = useState(null);
+  const [mapaRelatorioDataUrl, setMapaRelatorioDataUrl] = useState(null);
   const [analiseSobreposicao, setAnaliseSobreposicao] = useState(null);
   const [analisandoSobreposicao, setAnalisandoSobreposicao] = useState(false);
   const [carregandoOnline, setCarregandoOnline] = useState(false);
@@ -554,6 +558,12 @@ export default function App() {
     const areaConsulta = turf.area(geojson) / 10000;
     const cruzamento = geojsonAtual ? calcularSobreposicao(geojsonAtual, geojson, origem) : null;
     setUltimoCruzamento(cruzamento);
+
+    const cruzamentoDetalhado = geojsonAtual ? calcularSobreposicaoDetalhada(geojsonAtual, geojson, origem) : null;
+    setResultadoSobreposicaoDetalhado(cruzamentoDetalhado);
+    if (cruzamentoDetalhado) {
+      desenharSobreposicoesDetalhadas(cruzamentoDetalhado);
+    }
 
     let texto = `${origem}: feição encontrada e carregada no mapa.\n`;
     texto += `Código pesquisado: ${codigo}\n`;
@@ -1521,6 +1531,224 @@ function normalizarComparacao(valor) {
     setMostrarPreviewCar(true);
   }
 
+
+  async function capturarMapaComoImagem() {
+    try {
+      const mapElement = document.getElementById("map");
+      if (!mapElement) return null;
+
+      if (mapRef.current) {
+        mapRef.current.invalidateSize();
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const canvas = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 1.35,
+        logging: false,
+      });
+
+      const dataUrl = canvas.toDataURL("image/png");
+      setMapaRelatorioDataUrl(dataUrl);
+      return dataUrl;
+    } catch (error) {
+      console.error("Erro ao capturar mapa para relatório", error);
+      return null;
+    }
+  }
+
+  function calcularSobreposicaoDetalhada(perimetroBase, feicoesConsulta, origemPadrao = "FEIÇÃO CONSULTADA") {
+    try {
+      if (!perimetroBase?.features?.length || !feicoesConsulta?.features?.length) return null;
+
+      const baseFeatures = perimetroBase.features.filter((f) => f.geometry);
+      const consultaFeatures = feicoesConsulta.features.filter((f) => f.geometry);
+      const intersecoes = [];
+
+      let indice = 0;
+
+      for (const base of baseFeatures) {
+        for (const feature of consultaFeatures) {
+          try {
+            let inter = null;
+
+            try {
+              inter = turf.intersect(turf.featureCollection([base, feature]));
+            } catch {
+              inter = turf.intersect(base, feature);
+            }
+
+            if (!inter || !inter.geometry) continue;
+
+            const areaInterHa = turf.area(inter) / 10000;
+            if (areaInterHa <= 0.000001) continue;
+
+            const props = feature.properties || {};
+            const codigo = obterValorPossivel(props, [
+              "parcela_co", "PARCELA_CO", "cod_imovel", "COD_IMOVEL", "codigo_imo", "CODIGO_IMO",
+              "cod_car", "COD_CAR", "codigo", "CODIGO"
+            ]);
+            const nome = obterValorPossivel(props, ["nome_area", "NOME_AREA", "nome", "NOME", "nom_imovel", "NOM_IMOVEL"]);
+            const sncr = obterValorPossivel(props, ["codigo_imo", "CODIGO_IMO", "cod_imovel", "COD_IMOVEL", "sncr", "SNCR"]);
+            const matricula = obterValorPossivel(props, ["registro_m", "REGISTRO_M", "matricula", "MATRICULA"]);
+            const municipio = obterValorPossivel(props, ["municipio_", "MUNICIPIO_", "municipio", "MUNICIPIO", "nom_munici", "NOM_MUNICI"]);
+            const status = obterValorPossivel(props, ["status", "STATUS", "situacao_i", "SITUACAO_I"]);
+            const cor = corSobreposicao(indice);
+
+            inter.properties = {
+              ...props,
+              __origem: props.__origem || origemPadrao,
+              __codigo: codigo || "-",
+              __nome: nome || "-",
+              __sncr: sncr || "-",
+              __matricula: matricula || "-",
+              __municipio: municipio || "-",
+              __status: status || "-",
+              __areaSobrepostaHa: Number(areaInterHa.toFixed(4)),
+              __cor: cor,
+            };
+
+            intersecoes.push(inter);
+            indice++;
+          } catch (e) {
+            console.warn("Falha ao calcular interseção individual", e);
+          }
+        }
+      }
+
+      const areaBaseHa = turf.area(perimetroBase) / 10000;
+      const areaSomadaHa = intersecoes.reduce((soma, f) => soma + (f.properties.__areaSobrepostaHa || 0), 0);
+
+      let areaUniaoHa = 0;
+      let uniaoGeom = null;
+
+      for (const inter of intersecoes) {
+        try {
+          if (!uniaoGeom) {
+            uniaoGeom = inter;
+          } else {
+            uniaoGeom = turf.union(turf.featureCollection([uniaoGeom, inter]));
+          }
+        } catch {
+          // Fallback: mantém soma, mas marca tecnicamente.
+        }
+      }
+
+      if (uniaoGeom) {
+        areaUniaoHa = turf.area(uniaoGeom) / 10000;
+      } else {
+        areaUniaoHa = Math.min(areaSomadaHa, areaBaseHa);
+      }
+
+      const percentualUniao = areaBaseHa > 0 ? (areaUniaoHa / areaBaseHa) * 100 : 0;
+      const areaLivreHa = Math.max(areaBaseHa - areaUniaoHa, 0);
+
+      return {
+        areaBaseHa: Number(areaBaseHa.toFixed(4)),
+        areaSobrepostaSomadaHa: Number(areaSomadaHa.toFixed(4)),
+        areaSobrepostaUniaoHa: Number(areaUniaoHa.toFixed(4)),
+        areaLivreHa: Number(areaLivreHa.toFixed(4)),
+        percentualSobreposto: Number(percentualUniao.toFixed(2)),
+        quantidade: intersecoes.length,
+        intersecoes: {
+          type: "FeatureCollection",
+          features: intersecoes
+        },
+        uniao: uniaoGeom || null
+      };
+    } catch (error) {
+      console.error("Erro no cálculo detalhado de sobreposição", error);
+      return null;
+    }
+  }
+
+  function desenharSobreposicoesDetalhadas(resultado) {
+    const map = mapRef.current;
+    if (!map || !resultado?.intersecoes?.features?.length) return;
+
+    if (overlapLayerRef.current) {
+      map.removeLayer(overlapLayerRef.current);
+      overlapLayerRef.current = null;
+    }
+
+    if (mapLegendControlRef.current) {
+      map.removeControl(mapLegendControlRef.current);
+      mapLegendControlRef.current = null;
+    }
+
+    const layer = L.geoJSON(resultado.intersecoes, {
+      style: (feature) => ({
+        color: feature.properties.__cor || "#ef4444",
+        weight: 3,
+        fillColor: feature.properties.__cor || "#ef4444",
+        fillOpacity: 0.38,
+      }),
+      onEachFeature: (feature, camada) => {
+        const p = feature.properties || {};
+        camada.bindPopup(`
+          <strong>${p.__origem || "Sobreposição"}</strong><br/>
+          Código: ${p.__codigo || "-"}<br/>
+          Nome: ${p.__nome || "-"}<br/>
+          Área sobreposta: ${p.__areaSobrepostaHa || 0} ha
+        `);
+      },
+    }).addTo(map);
+
+    overlapLayerRef.current = layer;
+
+    const legend = L.control({ position: "bottomleft" });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create("div", "map-legend");
+      const itens = resultado.intersecoes.features.slice(0, 12).map((f, idx) => {
+        const p = f.properties || {};
+        return `<div><span style="background:${p.__cor};"></span>${idx + 1}. ${p.__origem || ""} ${String(p.__codigo || "").slice(0, 24)}</div>`;
+      }).join("");
+
+      div.innerHTML = `<strong>Sobreposições</strong>${itens}`;
+      return div;
+    };
+    legend.addTo(map);
+    mapLegendControlRef.current = legend;
+
+    try {
+      map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+      setTimeout(() => map.invalidateSize(), 180);
+    } catch {}
+  }
+
+  async function recalcularSobreposicaoParaRelatorio() {
+    if (!geojsonAtual || !consultaGeojson) {
+      alert("Carregue um perímetro base e uma feição/camada consultada para calcular sobreposição.");
+      return null;
+    }
+
+    const resultado = calcularSobreposicaoDetalhada(geojsonAtual, consultaGeojson, "FEIÇÃO CONSULTADA");
+
+    if (!resultado) {
+      alert("Não foi possível calcular a sobreposição.");
+      return null;
+    }
+
+    setResultadoSobreposicaoDetalhado(resultado);
+
+    setUltimoCruzamento({
+      origem: "Análise detalhada",
+      areaBase: resultado.areaBaseHa,
+      areaConsulta: resultado.areaSobrepostaSomadaHa,
+      areaIntersecao: resultado.areaSobrepostaUniaoHa,
+      percentualBase: resultado.percentualSobreposto,
+      percentualConsulta: 0,
+    });
+
+    desenharSobreposicoesDetalhadas(resultado);
+    await capturarMapaComoImagem();
+
+    return resultado;
+  }
+
   function usarConsultaComoPerimetroAtual() {
     if (!consultaGeojson) {
       alert("Não existe feição consultada para usar como perímetro.");
@@ -1815,6 +2043,114 @@ R$ ${propostaForm.valor || "A definir"}`;
     setDados((d) => ({ ...d, analises: d.analises.filter((a) => a.id !== analiseId) }));
   }
 
+
+  async function gerarRelatorioWordCartograficoV22() {
+    const resultado = resultadoSobreposicaoDetalhado || await recalcularSobreposicaoParaRelatorio();
+    if (!resultado) return;
+
+    const mapaDataUrl = mapaRelatorioDataUrl || await capturarMapaComoImagem();
+
+    const linhas = resultado.intersecoes.features.map((f, idx) => {
+      const p = f.properties || {};
+      return [
+        String(idx + 1),
+        p.__origem || "-",
+        p.__codigo || "-",
+        p.__sncr || "-",
+        p.__nome || "-",
+        p.__matricula || "-",
+        p.__municipio || "-",
+        p.__status || "-",
+        `${Number(p.__areaSobrepostaHa || 0).toLocaleString("pt-BR")} ha`
+      ];
+    });
+
+    const conteudoMapa = mapaDataUrl
+      ? `<p><strong>4. Mapa da análise de sobreposição</strong></p><p><img src="${mapaDataUrl}" style="width:680px;max-width:100%;border:1px solid #999" /></p><p><em>Figura 01 – Perímetro analisado e feições sobrepostas identificadas no cruzamento espacial.</em></p>`
+      : `<p><strong>4. Mapa da análise de sobreposição</strong></p><p><em>Mapa não capturado automaticamente. Recomenda-se gerar o relatório com o mapa visível na tela.</em></p>`;
+
+    const legendaHtml = resultado.intersecoes.features.map((f, idx) => {
+      const p = f.properties || {};
+      return `<tr>
+        <td>${idx + 1}</td>
+        <td><span style="display:inline-block;width:14px;height:14px;background:${p.__cor};border:1px solid #333"></span></td>
+        <td>${p.__origem || "-"}</td>
+        <td>${p.__codigo || "-"}</td>
+        <td>${p.__nome || "-"}</td>
+      </tr>`;
+    }).join("");
+
+    const tabelaHtml = linhas.map((linha) => `
+      <tr>${linha.map((cel) => `<td>${cel}</td>`).join("")}</tr>
+    `).join("");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4 landscape; margin: 1.5cm; }
+  body { font-family: Arial, sans-serif; color: #111; font-size: 11px; }
+  h1 { color: #163b22; font-size: 20px; margin: 0 0 6px; }
+  h2 { color: #163b22; font-size: 15px; margin-top: 18px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; }
+  th, td { border: 1px solid #777; padding: 5px; vertical-align: top; }
+  th { background: #e9efe9; font-weight: bold; }
+  .header { border-bottom: 3px solid #c9a400; margin-bottom: 14px; padding-bottom: 10px; }
+  .muted { color: #555; }
+  .note { font-size: 10px; color: #555; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>RELATÓRIO DE ANÁLISE DE SOBREPOSIÇÃO</h1>
+    <div>Longitude Assessoria Rural e Urbano</div>
+  </div>
+
+  <h2>1. Identificação</h2>
+  <table>
+    <tr><th>Data da análise</th><td>${hojeBR()}</td></tr>
+    <tr><th>Área do perímetro analisado</th><td>${resultado.areaBaseHa.toLocaleString("pt-BR")} ha</td></tr>
+    <tr><th>Área sobreposta efetiva</th><td>${resultado.areaSobrepostaUniaoHa.toLocaleString("pt-BR")} ha</td></tr>
+    <tr><th>Área livre estimada</th><td>${resultado.areaLivreHa.toLocaleString("pt-BR")} ha</td></tr>
+    <tr><th>Percentual sobre o perímetro</th><td>${resultado.percentualSobreposto.toLocaleString("pt-BR")}%</td></tr>
+    <tr><th>Quantidade de sobreposições</th><td>${resultado.quantidade}</td></tr>
+  </table>
+
+  <h2>2. Bases analisadas</h2>
+  <p>Foram consideradas as feições carregadas/consultadas no sistema Longitude Geo Intelligence, incluindo base SIGEF local importada, CAR/SICAR consultado e demais perímetros disponíveis no momento da análise.</p>
+
+  <h2>3. Síntese técnica</h2>
+  <p>Foram identificadas ${resultado.quantidade} sobreposição(ões). O cálculo técnico considera a <strong>união geométrica das interseções</strong>, evitando duplicidade quando mais de uma feição recobre a mesma parte do perímetro analisado.</p>
+
+  ${conteudoMapa}
+
+  <h2>5. Legenda das feições sobrepostas</h2>
+  <table>
+    <tr><th>#</th><th>Cor</th><th>Origem</th><th>Código</th><th>Nome/Identificação</th></tr>
+    ${legendaHtml}
+  </table>
+
+  <h2>6. Quadro técnico de sobreposições</h2>
+  <table>
+    <tr><th>#</th><th>Origem</th><th>Código</th><th>SNCR/Cód. Imóvel</th><th>Nome</th><th>Matrícula</th><th>Município</th><th>Status</th><th>Área Sobreposta</th></tr>
+    ${tabelaHtml}
+  </table>
+
+  <h2>7. Conclusão técnica preliminar</h2>
+  <p>Após o cruzamento espacial realizado, foram identificadas as sobreposições descritas neste relatório. Este documento possui caráter técnico preliminar e deve ser validado com conferência da origem, data de atualização das bases, sistema de referência geodésico e documentação dominial/cadastral do imóvel.</p>
+  <p class="note">Observação: para uso cartorial, judicial ou bancário, recomenda-se conferência em ambiente SIG profissional e emissão com assinatura técnica.</p>
+
+  <br><br>
+  <p>______________________________________________<br>
+  Alexandre Magno Gomes de Lima<br>
+  Longitude Assessoria Rural e Urbano</p>
+</body>
+</html>`;
+
+    salvarArquivo("Relatorio_Sobreposicao_Longitude_Cartografico.doc", html, "application/msword;charset=utf-8");
+  }
+
   function limparBase() {
     if (!confirm("Tem certeza que deseja apagar todos os dados salvos neste navegador?")) return;
     setDados(initialData);
@@ -2072,6 +2408,7 @@ R$ ${propostaForm.valor || "A definir"}`;
               <div className="online-actions">
                 <button className="primary-button" type="button" onClick={usarConsultaComoPerimetroAtual}>Usar feição como perímetro atual</button>
                 <button className="secondary-action" type="button" onClick={baixarRelatorioSobreposicao}>Baixar relatório de sobreposição</button>
+                <button className="secondary-action" type="button" onClick={gerarRelatorioWordCartograficoV22}>Relatório Word com mapa</button>
               </div>
 
               <div className="preview-card">
