@@ -1,32 +1,50 @@
-# Longitude Geo Intelligence - MVP 2.4
+# Longitude Geo Intelligence — V67 Enterprise
 
-## Correção
+## O que é esta versão
 
-O botão "Baixar relatório de sobreposição" ainda dependia do cruzamento antigo.
-Nesta versão, os relatórios passam a usar também a análise automática criada quando o KML é carregado.
+A V67 Enterprise é uma versão de estabilização.
 
-## Agora funciona assim
+Ela parte da V64, que era a última base segura, e remove riscos introduzidos nas versões posteriores, como servidor local e GNSS ativo.
 
-1. Carrega KML/GeoJSON.
-2. Sistema busca CAR online pelo entorno e cruza SIGEF local, se importado.
-3. Sistema desenha as feições próximas/sobrepostas.
-4. Botão "Baixar relatório de sobreposição" usa esse resultado automático.
-5. Botão "Relatório Word com mapa" também usa esse resultado automático.
+## Objetivo
 
-## Atualizar
+Voltar o sistema a abrir normalmente e preparar uma estrutura profissional para evolução comercial.
+
+## Atualização recomendada
+
+Use atualização limpa, para não misturar arquivos antigos.
+
+### Opção 1 — automática
+
+Extraia o ZIP e execute:
 
 ```cmd
-xcopy D:\COMPARTILHAMENTO\longitude-geo-mvp-v24\longitude-geo-mvp-v24\* D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14\ /E /Y
-cd D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14
+ATUALIZAR_LIMPO_V67.bat
+```
+
+### Opção 2 — manual
+
+```cmd
+set DEST=D:\COMPARTILHAMENTO\longitude-geo-mvp-v14\longitude-geo-mvp-v14
+
+rmdir /S /Q "%DEST%\src"
+rmdir /S /Q "%DEST%\public"
+rmdir /S /Q "%DEST%\dist"
+
+xcopy D:\COMPARTILHAMENTO\longitude-geo-v67-enterprise\longitude-geo-v67-enterprise\* "%DEST%\" /E /Y /I
+
+cd /d "%DEST%"
 npm install
 npm run build
 npm run dev
 ```
 
-Se passar no teste local:
+## Observação
 
-```cmd
-git add .
-git commit -m "Corrigir relatorio para analise automatica"
-git push
-```
+Não use `npm run bases`. Esta versão não usa servidor local.
+
+## GNSS
+
+O GNSS Engine fica reservado em `src/components/GNSS`, mas não está ativo nesta versão para evitar tela preta.
+
+A reintrodução recomendada é na V70, como componente isolado e testado.

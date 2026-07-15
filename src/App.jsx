@@ -5,6 +5,7 @@ import * as toGeoJSON from "@tmcw/togeojson";
 import * as turf from "@turf/turf";
 import html2canvas from "html2canvas";
 import * as shpwrite from "@mapbox/shp-write";
+import shp from "shpjs";
 import logoLongitude from "./assets/logo-longitude.png";
 import {
   AlignmentType,
@@ -152,19 +153,37 @@ function numeroBR(valor, casas = 4) {
     maximumFractionDigits: casas,
   });
 }
-
 function extrairAtributosParcela(feature, origem = "") {
   const p = feature?.properties || {};
+  const valor = (nomes) => obterValorPossivel(p, nomes);
+
+  const codigo = valor([
+    "NUMEROESTA", "numeroesta", "NumeroEsta", "numeroEsta",
+    "COD_IMOVEL", "cod_imovel", "cod_car", "COD_CAR",
+    "codigo_imo", "CODIGO_IMO", "parcela_co", "PARCELA_CO", "codigo", "CODIGO"
+  ]) || "-";
+
+  const nomeBruto = valor([
+    "NOMEIMOVEL", "nomeimovel", "NOME_IMOVE", "nome_imove", "NOM_IMOVE", "nom_imove",
+    "NOM_IMOVEL", "nom_imovel", "NOME_IMOVEL", "nome_imovel", "NOMIMOVEL", "nomimovel",
+    "NOME_AREA", "nome_area", "NOME_FAZEN", "nome_fazen", "NOMEFAZEN", "nomefazen",
+    "NOME_FAZ", "nome_faz", "FAZENDA", "fazenda", "DENOMINACA", "denominaca",
+    "DENOMINACAO", "denominacao", "NOME", "nome", "NOM_PROP", "nom_prop",
+    "PROPRIEDAD", "propriedad", "IMOVEL", "imovel"
+  ]);
+
+  const nome = nomeBruto && String(nomeBruto).trim() && String(nomeBruto).trim() !== String(codigo).trim()
+    ? nomeBruto
+    : "Nome do imóvel não informado na base CAR";
+
   return {
     origem,
-    codigo:
-      p.parcela_co || p.PARCELA_CO || p.cod_imovel || p.COD_IMOVEL ||
-      p.cod_imovel || p.codigo_imo || p.CODIGO_IMO || p.codigo || p.CODIGO || "-",
-    sncr: p.codigo_imo || p.CODIGO_IMO || p.cod_imovel || p.COD_IMOVEL || p.sncr || p.SNCR || "-",
-    nome: p.nome_area || p.NOME_AREA || p.nome_imove || p.NOME_IMOVE || p.nome || p.NOME || "-",
-    matricula: p.registro_m || p.REGISTRO_M || p.matricula || p.MATRICULA || "-",
-    municipio: p.municipio_ || p.MUNICIPIO_ || p.municipio || p.MUNICIPIO || p.cod_munici || p.COD_MUNICI || "-",
-    status: p.status || p.STATUS || p.situacao_i || p.SITUACAO_I || "-",
+    codigo,
+    sncr: valor(["codigo_imo", "CODIGO_IMO", "cod_imovel", "COD_IMOVEL", "sncr", "SNCR", "NUMEROESTA"]) || "-",
+    nome,
+    matricula: valor(["registro_m", "REGISTRO_M", "matricula", "MATRICULA"]) || "-",
+    municipio: valor(["municipio_", "MUNICIPIO_", "municipio", "MUNICIPIO", "cod_munici", "COD_MUNICI", "MUNICIP", "municip"]) || "-",
+    status: valor(["status", "STATUS", "situacao_i", "SITUACAO_I", "SITUACAO", "situacao"]) || "-",
   };
 }
 
@@ -176,6 +195,165 @@ function bboxSobrepoe(a, b) {
 function featureCollectionDeUma(feature) {
   return { type: "FeatureCollection", features: [feature] };
 }
+
+function coordenadasIguais(a, b) {
+  if (!a || !b) return false;
+  return Math.abs(Number(a[0]) - Number(b[0])) < 1e-9 && Math.abs(Number(a[1]) - Number(b[1])) < 1e-9;
+}
+
+function fecharAnel(coords) {
+  if (!Array.isArray(coords) || coords.length < 3) return null;
+  const ring = coords.map((c) => [Number(c[0]), Number(c[1])]).filter((c) => Number.isFinite(c[0]) && Number.isFinite(c[1]));
+  if (ring.length < 3) return null;
+  if (!coordenadasIguais(ring[0], ring[ring.length - 1])) ring.push([...ring[0]]);
+  if (ring.length < 4) return null;
+  return ring;
+}
+
+function converterFeatureParaPoligono(feature) {
+  if (!feature?.geometry) return null;
+  const g = feature.geometry;
+
+  if (g.type === "Polygon" || g.type === "MultiPolygon") {
+    try {
+      return turf.cleanCoords(feature);
+    } catch {
+      return feature;
+    }
+  }
+
+  if (g.type === "LineString") {
+    const ring = fecharAnel(g.coordinates);
+    if (!ring) return null;
+    return {
+      type: "Feature",
+      properties: { ...(feature.properties || {}), __convertidoDeLinha: true },
+      geometry: { type: "Polygon", coordinates: [ring] },
+    };
+  }
+
+  if (g.type === "MultiLineString") {
+    const polys = [];
+    for (const linha of g.coordinates || []) {
+      const ring = fecharAnel(linha);
+      if (ring) polys.push([ring]);
+    }
+    if (!polys.length) return null;
+    return {
+      type: "Feature",
+      properties: { ...(feature.properties || {}), __convertidoDeLinha: true },
+      geometry: { type: "MultiPolygon", coordinates: polys },
+    };
+  }
+
+  return null;
+}
+
+function normalizarPerimetroGeojson(geojson) {
+  if (!geojson) return { type: "FeatureCollection", features: [] };
+
+  const entrada = geojson.type === "FeatureCollection"
+    ? geojson.features
+    : geojson.type === "Feature"
+      ? [geojson]
+      : [];
+
+  const poligonos = entrada
+    .map(converterFeatureParaPoligono)
+    .filter(Boolean)
+    .filter((f) => {
+      try { return turf.area(f) > 0.01; } catch { return false; }
+    });
+
+  return { type: "FeatureCollection", features: poligonos };
+}
+
+function obterFeaturePerimetroRobusto(geojson) {
+  const normalizado = normalizarPerimetroGeojson(geojson);
+  const validas = normalizado.features || [];
+  if (!validas.length) return null;
+  if (validas.length === 1) return validas[0];
+
+  let uniao = validas[0];
+
+  for (let i = 1; i < validas.length; i++) {
+    try {
+      const u = turf.union(turf.featureCollection([uniao, validas[i]]));
+      if (u?.geometry) uniao = u;
+    } catch {
+      // Se a união falhar por geometria inválida, mantém o maior polígono no final.
+    }
+  }
+
+  try {
+    if (turf.area(uniao) > 0.01) return uniao;
+  } catch {}
+
+  return validas
+    .map((f) => ({ f, area: (() => { try { return turf.area(f); } catch { return 0; } })() }))
+    .sort((a, b) => b.area - a.area)[0]?.f || null;
+}
+
+function calcularIntersecaoRobusta(perimetroFeature, feature) {
+  if (!perimetroFeature?.geometry || !feature?.geometry) {
+    return { inter: null, areaHa: 0, metodo: "sem_geometria" };
+  }
+
+  const candidato = converterFeatureParaPoligono(feature) || feature;
+
+  let bboxOk = false;
+  try {
+    bboxOk = bboxSobrepoe(turf.bbox(perimetroFeature), turf.bbox(candidato));
+  } catch {
+    bboxOk = false;
+  }
+
+  if (!bboxOk) return { inter: null, areaHa: 0, metodo: "bbox_fora" };
+
+  let toca = false;
+  try {
+    toca = turf.booleanIntersects(perimetroFeature, candidato);
+  } catch {
+    toca = true; // se falhar, ainda tenta intersect pelo bbox
+  }
+
+  if (!toca) return { inter: null, areaHa: 0, metodo: "nao_intersecta" };
+
+  const tentativas = [
+    () => turf.intersect(turf.featureCollection([perimetroFeature, candidato])),
+    () => turf.intersect(perimetroFeature, candidato),
+    () => turf.intersect(turf.cleanCoords(perimetroFeature), turf.cleanCoords(candidato)),
+    () => turf.intersect(turf.buffer(perimetroFeature, 0, { units: "meters" }), turf.buffer(candidato, 0, { units: "meters" })),
+  ];
+
+  for (const tentativa of tentativas) {
+    try {
+      const inter = tentativa();
+      if (inter?.geometry) {
+        const areaHa = turf.area(inter) / 10000;
+        if (areaHa > 0.000001) return { inter, areaHa, metodo: "intersect" };
+      }
+    } catch {}
+  }
+
+  // Fallback conservador: se a geometria visualmente/bbox cruza, usa interseção de BBOX como diagnóstico estimado.
+  try {
+    const a = turf.bbox(perimetroFeature);
+    const b = turf.bbox(candidato);
+    const ix1 = Math.max(a[0], b[0]);
+    const iy1 = Math.max(a[1], b[1]);
+    const ix2 = Math.min(a[2], b[2]);
+    const iy2 = Math.min(a[3], b[3]);
+    if (ix2 > ix1 && iy2 > iy1) {
+      const bboxPoly = turf.bboxPolygon([ix1, iy1, ix2, iy2]);
+      const areaHa = turf.area(bboxPoly) / 10000;
+      if (areaHa > 0.000001) return { inter: bboxPoly, areaHa, metodo: "bbox_estimado" };
+    }
+  } catch {}
+
+  return { inter: null, areaHa: 0, metodo: "falhou" };
+}
+
 
 function geojsonParaKml(geojson, nome = "Perimetro Longitude Geo") {
   const features = geojson?.features || [];
@@ -226,11 +404,26 @@ function somenteDigitos(valor) {
 }
 
 function obterValorPossivel(props, nomes) {
+  if (!props) return "";
+
   for (const nome of nomes) {
-    if (props && props[nome] !== undefined && props[nome] !== null && String(props[nome]).trim() !== "") {
+    if (props[nome] !== undefined && props[nome] !== null && String(props[nome]).trim() !== "") {
       return props[nome];
     }
   }
+
+  const mapa = {};
+  Object.keys(props).forEach((k) => {
+    mapa[String(k).toUpperCase()] = k;
+  });
+
+  for (const nome of nomes) {
+    const real = mapa[String(nome).toUpperCase()];
+    if (real && props[real] !== undefined && props[real] !== null && String(props[real]).trim() !== "") {
+      return props[real];
+    }
+  }
+
   return "";
 }
 
@@ -263,19 +456,142 @@ function detectarUfPorCentroide(geojson) {
     return "mt";
   }
 }
-
 function montarResumoFeicaoAuto(feature, origem, indice) {
   const p = feature.properties || {};
   return {
     indice,
     origem,
-    codigo: obterValorPossivel(p, ["parcela_co", "PARCELA_CO", "cod_imovel", "COD_IMOVEL", "codigo_imo", "CODIGO_IMO", "cod_car", "COD_CAR", "codigo", "CODIGO"]) || "-",
-    nome: obterValorPossivel(p, ["nome_area", "NOME_AREA", "nome", "NOME", "nom_imovel", "NOM_IMOVEL"]) || "-",
-    sncr: obterValorPossivel(p, ["codigo_imo", "CODIGO_IMO", "cod_imovel", "COD_IMOVEL", "sncr", "SNCR"]) || "-",
+    codigo: obterValorPossivel(p, ["NUMEROESTA", "numeroesta", "NumeroEsta", "numeroEsta", "COD_IMOVEL", "cod_imovel", "cod_car", "COD_CAR", "codigo_imo", "CODIGO_IMO", "parcela_co", "PARCELA_CO", "codigo", "CODIGO"]) || "-",
+    nome: obterValorPossivel(p, ["NOM_IMOVEL", "nom_imovel", "NOME_IMOVEL", "nome_imovel", "nome_imove", "NOME_IMOVE", "nome_area", "NOME_AREA", "nome", "NOME", "nom_imovel", "NOM_IMOVEL", "DENOMINACAO", "denominacao", "NOME_FAZ", "FAZENDA", "NOM_PROP", "PROPRIEDAD"]) || "-",
+    sncr: obterValorPossivel(p, ["codigo_imo", "CODIGO_IMO", "cod_imovel", "COD_IMOVEL", "sncr", "SNCR", "NUMEROESTA"]) || "-",
     matricula: obterValorPossivel(p, ["registro_m", "REGISTRO_M", "matricula", "MATRICULA"]) || "-",
-    municipio: obterValorPossivel(p, ["municipio_", "MUNICIPIO_", "municipio", "MUNICIPIO", "nom_munici", "NOM_MUNICI"]) || "-",
-    status: obterValorPossivel(p, ["status", "STATUS", "situacao_i", "SITUACAO_I"]) || "-",
+    municipio: obterValorPossivel(p, ["municipio_", "MUNICIPIO_", "municipio", "MUNICIPIO", "nom_munici", "NOM_MUNICI", "MUNICIP"]) || "-",
+    status: obterValorPossivel(p, ["status", "STATUS", "situacao_i", "SITUACAO_I", "SITUACAO"]) || "-",
   };
+}
+
+
+
+
+function normalizarGeojsonImportado(resultado) {
+  if (!resultado) return { type: "FeatureCollection", features: [] };
+
+  if (resultado.type === "FeatureCollection") return resultado;
+
+  if (Array.isArray(resultado)) {
+    return {
+      type: "FeatureCollection",
+      features: resultado.flatMap((camada) => camada?.features || [])
+    };
+  }
+
+  if (resultado.features) {
+    return {
+      type: "FeatureCollection",
+      features: resultado.features
+    };
+  }
+
+  return { type: "FeatureCollection", features: [] };
+}
+
+
+function obterFeaturePerimetro(geojson) {
+  return obterFeaturePerimetroRobusto(geojson);
+}
+
+function bboxIntersectsFeature(bboxFeature, feature) {
+  try { return turf.booleanIntersects(bboxFeature, feature); } catch { return false; }
+}
+
+function numeroPtBr(valor) {
+  if (valor === null || valor === undefined || valor === "") return 0;
+  if (typeof valor === "number") return valor;
+  const s = String(valor).replace(/\./g, "").replace(",", ".").replace(/[^0-9.-]/g, "");
+  return Number(s) || 0;
+}
+
+
+
+
+
+
+function normalizarChaveIntermat(valor) {
+  if (valor === undefined || valor === null) return "";
+  const s = String(valor).trim();
+  if (!s) return "";
+  const n = Number(s.replace(",", "."));
+  if (Number.isFinite(n)) return String(Math.trunc(n));
+  return s;
+}
+function resumirFeatureIntermat(feature) {
+  const p = feature?.properties || {};
+  const valor = (nomes) => obterValorPossivel(p, nomes);
+  const codigo = valor(["__codigo", "PROP_CODIG", "PROP_CODIGO", "PROP_CODIGO", "CODIGO", "codigo", "ID", "id"]);
+  const tituloPrimitivo = valor(["__tituloPrimitivo", "PROP_REQUE", "prop_reque", "PROP_REQUER", "prop_requer", "REQUERENTE", "requerente", "TITULAR", "titular"]);
+  const fazendaDenominacao = valor(["__nomeFazenda", "PROP_DENOM", "prop_denom", "PROP_DENOMI", "prop_denomi", "DENOMINACAO", "denominacao", "NOME_FAZ", "nome_faz", "NOME", "nome"]);
+  return {
+    codigo,
+    tituloPrimitivo: tituloPrimitivo || (codigo ? `INTERMAT ${codigo}` : "TÍTULO NÃO IDENTIFICADO"),
+    nomeFazenda: fazendaDenominacao || "Fazenda/denominação não informada na base INTERMAT",
+    requerente: tituloPrimitivo || "-",
+    denominacao: fazendaDenominacao || "-",
+    areaTitulo: valor(["__areaTituloHa", "PROP_AREA", "AREA", "area"]),
+    registro: valor(["__registro", "PROP_REGIS", "PROP_REGIST", "REGISTRO", "registro"]),
+    livro: valor(["__livro", "PROP_LIVRO", "LIVRO", "livro"]),
+    folha: valor(["__folha", "PROP_FOLHA", "FOLHA", "folha"]),
+    local: valor(["PROP_LOCAL", "PROP_LOCALI", "LOCAL", "local"]),
+    orgao: valor(["PROP_ORGAO", "PROP_ORGAOT", "ORGAO", "orgao"]),
+    origem: valor(["PROP_ORIGE", "PROP_ORIGEM", "ORIGEM", "origem"]),
+    matricula: valor(["__matricula", "PROP_MATRI", "PROP_MATRIC", "MATRICULA", "matricula"]),
+    municipio: valor(["__municipio", "PROP_CODMU", "PROP_MUNGE", "PROP_CODMUN", "MUNICIPIO", "municipio"]),
+  };
+}
+
+function normalizarAtributosIntermatFeature(feature) {
+  const resumo = resumirFeatureIntermat(feature);
+  return {
+    ...feature,
+    properties: {
+      ...(feature.properties || {}),
+      __origem: "INTERMAT",
+      __codigo: normalizarChaveIntermat(resumo.codigo) || "-",
+      __tituloPrimitivo: resumo.tituloPrimitivo || "-",
+      __nomeFazenda: resumo.nomeFazenda || "-",
+      __nome: resumo.tituloPrimitivo || resumo.nomeFazenda || "-",
+      __requerente: resumo.requerente || "-",
+      __registro: resumo.registro || "-",
+      __livro: resumo.livro || "-",
+      __folha: resumo.folha || "-",
+      __orgao: resumo.orgao || "-",
+      __matricula: resumo.matricula || "-",
+      __municipio: resumo.municipio || "-",
+      __status: resumo.origem || "-",
+      __areaTituloHa: numeroPtBr(resumo.areaTitulo),
+    }
+  };
+}
+function nomeTituloIntermat(properties) {
+  const p = properties || {};
+  return (
+    p.__tituloPrimitivo ||
+    p.PROP_REQUE || p.prop_reque ||
+    p.PROP_REQUER || p.prop_requer ||
+    p.PROP_REQUERC || p.prop_requerc ||
+    p.__nome ||
+    "TÍTULO NÃO IDENTIFICADO"
+  );
+}
+
+function nomeFazendaIntermat(properties) {
+  const p = properties || {};
+  return (
+    p.__nomeFazenda ||
+    p.PROP_DENOM || p.prop_denom ||
+    p.PROP_DENOMI || p.prop_denomi ||
+    p.DENOMINACAO || p.denominacao ||
+    "Fazenda/denominação não informada na base INTERMAT"
+  );
 }
 
 export default function App() {
@@ -284,6 +600,8 @@ export default function App() {
   const consultaLayerRef = useRef(null);
   const autoCarLayerRef = useRef(null);
   const autoSigefLayerRef = useRef(null);
+  const autoIntermatLayerRef = useRef(null);
+  const highlightPerimeterLayerRef = useRef(null);
   const overlapLayerRef = useRef(null);
   const mapLegendControlRef = useRef(null);
   const sobreposicaoLayerRef = useRef(null);
@@ -302,10 +620,16 @@ export default function App() {
   const [geojsonAtual, setGeojsonAtual] = useState(null);
   const [diagnostico, setDiagnostico] = useState("Aguardando envio de arquivo KML.");
   const [autoAnaliseStatus, setAutoAnaliseStatus] = useState("");
+  const [carCapabilitiesInfo, setCarCapabilitiesInfo] = useState("");
   const [autoCarGeojson, setAutoCarGeojson] = useState(null);
   const [autoSigefGeojson, setAutoSigefGeojson] = useState(null);
+  const [autoIntermatGeojson, setAutoIntermatGeojson] = useState(null);
   const [autoResumo, setAutoResumo] = useState(null);
-  const [autoCamadas, setAutoCamadas] = useState({ car: true, sigef: true });
+  const [autoCamadas, setAutoCamadas] = useState({ car: true, sigef: true, intermat: true });
+  const [basesAnaliseAtivas, setBasesAnaliseAtivas] = useState({ car: true, sigef: true, intermat: true });
+
+  const [sigefArquivosImportados, setSigefArquivosImportados] = useState([]);
+  const [sigefPersistenciaAtiva, setSigefPersistenciaAtiva] = useState(true);
   const [mapaBase, setMapaBase] = useState("padrao");
 
   const [clienteForm, setClienteForm] = useState({ nome: "", documento: "", telefone: "", email: "" });
@@ -327,12 +651,24 @@ export default function App() {
   const [sigefLocalGeojson, setSigefLocalGeojson] = useState(null);
   const [sigefLocalNome, setSigefLocalNome] = useState("");
   const [sigefLocalInfo, setSigefLocalInfo] = useState("");
+  const [intermatLocalGeojson, setIntermatLocalGeojson] = useState(null);
+  const [intermatLocalNome, setIntermatLocalNome] = useState("");
+  const [intermatLocalInfo, setIntermatLocalInfo] = useState("");
+  const [intermatIndex, setIntermatIndex] = useState({});
+  const [carLocalGeojson, setCarLocalGeojson] = useState(null);
+  const [carLocalNome, setCarLocalNome] = useState("");
+  const [carLocalInfo, setCarLocalInfo] = useState("");
   const [ultimoCruzamento, setUltimoCruzamento] = useState(null);
   const [resultadoSobreposicaoDetalhado, setResultadoSobreposicaoDetalhado] = useState(null);
   const [mapaRelatorioDataUrl, setMapaRelatorioDataUrl] = useState(null);
   const [analiseSobreposicao, setAnaliseSobreposicao] = useState(null);
   const [analisandoSobreposicao, setAnalisandoSobreposicao] = useState(false);
   const [carregandoOnline, setCarregandoOnline] = useState(false);
+
+
+  useEffect(() => {
+    carregarSigefSalvoDoNavegador();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
@@ -425,7 +761,7 @@ export default function App() {
 
     if (geojsonAtual) {
       const layer = L.geoJSON(geojsonAtual, {
-        style: { color: "#F0D500", weight: 4, fillColor: "#3D8B37", fillOpacity: 0.28 },
+        style: { color: "#ffea00", weight: 7, fillColor: "#3D8B37", fillOpacity: 0.10, opacity: 1 },
       }).addTo(map);
       geoLayerRef.current = layer;
       try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {}
@@ -511,24 +847,35 @@ export default function App() {
     const map = mapRef.current;
     if (!map) return;
 
+    const geojsonNormalizado = normalizarPerimetroGeojson(geojson);
+    const perimetroFeature = obterFeaturePerimetro(geojsonNormalizado);
+
+    if (!perimetroFeature) {
+      alert("O arquivo foi carregado, mas não contém polígono válido. Se for KML de linha, a linha precisa estar fechada para virar perímetro.");
+      return;
+    }
+
+    const fcNormalizado = { type: "FeatureCollection", features: [perimetroFeature] };
+
     if (geoLayerRef.current) map.removeLayer(geoLayerRef.current);
     if (drawnItemsRef.current) drawnItemsRef.current.clearLayers();
 
-    const layer = L.geoJSON(geojson, {
-      style: { color: "#F0D500", weight: 4, fillColor: "#3D8B37", fillOpacity: 0.28 },
+    const layer = L.geoJSON(fcNormalizado, {
+      style: { color: "#ffea00", weight: 7, fillColor: "#3D8B37", fillOpacity: 0.10, opacity: 1 },
     }).addTo(map);
 
     geoLayerRef.current = layer;
     map.fitBounds(layer.getBounds(), { padding: [30, 30] });
 
-    const hectares = turf.area(geojson) / 10000;
-    setGeojsonAtual(geojson);
+    const hectares = turf.area(perimetroFeature) / 10000;
+    setGeojsonAtual(fcNormalizado);
     setAreaHa(Number(hectares.toFixed(4)));
     setArquivoNome(nomeArquivo);
-    setDiagnostico(mensagem);
+    setDiagnostico(`${mensagem}
+Perímetro normalizado para análise: ${Number(hectares.toFixed(4)).toLocaleString("pt-BR")} ha.`);
 
     setTimeout(() => {
-      executarAnaliseAutomaticaDoPerimetro(geojson);
+      executarAnaliseAutomaticaDoPerimetro(fcNormalizado);
     }, 250);
   }
 
@@ -694,6 +1041,210 @@ function normalizarComparacao(valor) {
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
+  }function normalizarResultadoShpZip(resultado) {
+    if (!resultado) return { type: "FeatureCollection", features: [] };
+
+    if (resultado.type === "FeatureCollection") return resultado;
+
+    if (Array.isArray(resultado)) {
+      return {
+        type: "FeatureCollection",
+        features: resultado.flatMap((item) => {
+          const fc = item?.geojson || item;
+          return Array.isArray(fc?.features) ? fc.features : [];
+        }),
+      };
+    }
+
+    if (resultado.geojson?.type === "FeatureCollection") return resultado.geojson;
+
+    return { type: "FeatureCollection", features: [] };
+  }
+
+  function detectarUfPorNomeArquivo(nome = "") {
+    const ufs = [
+      "AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR",
+      "PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"
+    ];
+
+    const upper = String(nome).toUpperCase();
+    for (const uf of ufs) {
+      const rx = new RegExp(`(^|[^A-Z])${uf}([^A-Z]|$)`);
+      if (rx.test(upper)) return uf;
+    }
+
+    return "";
+  }
+
+  async function lerArquivoZipSigef(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const resultado = await shp(arrayBuffer);
+    const fc = normalizarResultadoShpZip(resultado);
+    const uf = detectarUfPorNomeArquivo(file.name);
+
+    return {
+      nome: file.name,
+      uf,
+      geojson: {
+        type: "FeatureCollection",
+        features: (fc.features || []).map((feature, idx) => ({
+          ...feature,
+          properties: {
+            ...(feature.properties || {}),
+            __origem_base: "SIGEF LOCAL",
+            __arquivo_zip: file.name,
+            __uf_arquivo: uf,
+            __idx_zip: idx + 1,
+          },
+        })),
+      },
+    };
+  }const SIGEF_STORAGE_KEY = "longitude_sigef_brasil_local_v1";
+  const SIGEF_META_STORAGE_KEY = "longitude_sigef_brasil_meta_v1";
+
+  function calcularAssinaturaArquivo(file) {
+    return `${file.name}|${file.size}|${file.lastModified}`;
+  }
+
+  function salvarSigefNoNavegador(geojson, arquivos) {
+    if (!sigefPersistenciaAtiva) return;
+    try {
+      localStorage.setItem(SIGEF_STORAGE_KEY, JSON.stringify(geojson || { type: "FeatureCollection", features: [] }));
+      localStorage.setItem(SIGEF_META_STORAGE_KEY, JSON.stringify(arquivos || []));
+    } catch (error) {
+      console.warn("Não foi possível salvar SIGEF no navegador", error);
+      setSigefLocalInfo("Base SIGEF carregada, mas grande demais para salvar no navegador. Continue usando normalmente nesta sessão.");
+    }
+  }
+
+  function carregarSigefSalvoDoNavegador() {
+    try {
+      const raw = localStorage.getItem(SIGEF_STORAGE_KEY);
+      const metaRaw = localStorage.getItem(SIGEF_META_STORAGE_KEY);
+      if (!raw) return;
+      const geojson = JSON.parse(raw);
+      const meta = metaRaw ? JSON.parse(metaRaw) : [];
+      if (geojson?.type === "FeatureCollection" && Array.isArray(geojson.features)) {
+        setSigefLocalGeojson(geojson);
+        setSigefArquivosImportados(Array.isArray(meta) ? meta : []);
+        setSigefLocalNome(`SIGEF BRASIL LOCAL — ${geojson.features.length} feições`);
+        setSigefLocalInfo(`SIGEF restaurado do navegador: ${geojson.features.length} feições em ${Array.isArray(meta) ? meta.length : 0} arquivo(s).`);
+        setBasesAnaliseAtivas((prev) => ({ ...prev, sigef: true }));
+      }
+    } catch (error) {
+      console.warn("Não foi possível restaurar SIGEF salvo", error);
+    }
+  }
+
+  function limparBaseSigefBrasil() {
+    const confirmar = window.confirm("Deseja limpar a base SIGEF LOCAL importada e remover o cache do navegador?");
+    if (!confirmar) return;
+    setSigefLocalGeojson(null);
+    setSigefLocalNome("");
+    setSigefLocalInfo("Base SIGEF LOCAL limpa.");
+    setSigefArquivosImportados([]);
+    try {
+      localStorage.removeItem(SIGEF_STORAGE_KEY);
+      localStorage.removeItem(SIGEF_META_STORAGE_KEY);
+    } catch {}
+  }
+
+  function resumoUfSigef(arquivos = sigefArquivosImportados) {
+    return arquivos.reduce((acc, item) => {
+      const uf = item.uf || "UF?";
+      acc[uf] = (acc[uf] || 0) + Number(item.features || 0);
+      return acc;
+    }, {});
+  }async function importarSigefZipNacional(event) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const zips = files.filter((f) => /\.zip$/i.test(f.name));
+
+    if (!zips.length) {
+      alert("Selecione um ou mais arquivos ZIP baixados do SIGEF.");
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      setSigefLocalInfo(`Importando ${zips.length} arquivo(s) ZIP do SIGEF...`);
+
+      const assinaturasExistentes = new Set(sigefArquivosImportados.map((item) => item.assinatura));
+      const zipsNovos = zips.filter((file) => !assinaturasExistentes.has(calcularAssinaturaArquivo(file)));
+      const duplicados = zips.length - zipsNovos.length;
+
+      if (!zipsNovos.length) {
+        alert("Todos os ZIPs selecionados já foram importados. Nenhuma feição nova foi adicionada.");
+        setSigefLocalInfo(`Nenhum ZIP novo importado. ${duplicados} arquivo(s) duplicado(s) ignorado(s).`);
+        event.target.value = "";
+        return;
+      }
+
+      const importados = [];
+      const erros = [];
+
+      for (const file of zipsNovos) {
+        try {
+          const item = await lerArquivoZipSigef(file);
+          if (item.geojson.features.length) {
+            importados.push({
+              ...item,
+              assinatura: calcularAssinaturaArquivo(file),
+              tamanho: file.size,
+              ultimaModificacao: file.lastModified,
+            });
+          } else {
+            erros.push(`${file.name}: nenhum polígono encontrado`);
+          }
+        } catch (error) {
+          erros.push(`${file.name}: ${error.message}`);
+        }
+      }
+
+      const baseAtual = sigefLocalGeojson?.features?.length ? sigefLocalGeojson.features : [];
+      const novas = importados.flatMap((item) => item.geojson.features);
+      const mesclado = { type: "FeatureCollection", features: [...baseAtual, ...novas] };
+
+      const novosArquivos = [
+        ...sigefArquivosImportados,
+        ...importados.map((item) => ({
+          nome: item.nome,
+          uf: item.uf || "",
+          features: item.geojson.features.length,
+          assinatura: item.assinatura,
+          tamanho: item.tamanho,
+          ultimaModificacao: item.ultimaModificacao,
+          dataImportacao: new Date().toISOString(),
+        })),
+      ];
+
+      setSigefLocalGeojson(mesclado);
+      setSigefArquivosImportados(novosArquivos);
+      setSigefLocalNome(`SIGEF BRASIL LOCAL — ${mesclado.features.length} feições`);
+      setBasesAnaliseAtivas((prev) => ({ ...prev, sigef: true }));
+      salvarSigefNoNavegador(mesclado, novosArquivos);
+
+      const resumoUf = resumoUfSigef(novosArquivos);
+      const resumoTexto = Object.entries(resumoUf)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([uf, qtd]) => `${uf}: ${qtd}`)
+        .join(" • ");
+
+      setSigefLocalInfo(
+        `SIGEF nacional importado: ${importados.length} ZIP(s) novo(s), ${novas.length} nova(s) feição(ões), total atual ${mesclado.features.length}. Duplicados ignorados: ${duplicados}. ${resumoTexto}`
+      );
+
+      if (erros.length) {
+        console.warn("Erros na importação SIGEF ZIP:", erros);
+        alert(`Importação concluída com ${erros.length} aviso(s). Veja o console para detalhes.`);
+      }
+    } catch (error) {
+      console.error("Erro ao importar ZIP SIGEF", error);
+      alert(`Erro ao importar ZIP SIGEF: ${error.message}`);
+    } finally {
+      event.target.value = "";
+    }
   }
 
   function importarBaseSigefLocal(event) {
@@ -737,6 +1288,127 @@ function normalizarComparacao(valor) {
     };
 
     leitor.readAsText(arquivo);
+  }
+
+
+  async function importarBaseCarLocal(event) {
+    const arquivo = event.target.files?.[0];
+    if (!arquivo) return;
+
+    try {
+      setCarLocalInfo("Importando base CAR local...");
+
+      let geojsonCar = null;
+      const nome = arquivo.name.toLowerCase();
+
+      if (nome.endsWith(".zip")) {
+        const buffer = await arquivo.arrayBuffer();
+        const resultado = await shp(buffer);
+        geojsonCar = normalizarGeojsonImportado(resultado);
+      } else if (nome.endsWith(".geojson") || nome.endsWith(".json")) {
+        const texto = await arquivo.text();
+        geojsonCar = JSON.parse(texto);
+      } else {
+        alert("Para importar CAR local, use ZIP de Shapefile ou GeoJSON.");
+        return;
+      }
+
+      if (!geojsonCar?.features?.length) {
+        alert("A base CAR local não possui feições válidas.");
+        return;
+      }
+
+      setCarLocalGeojson(geojsonCar);
+      setCarLocalNome(arquivo.name);
+
+      const campos = Object.keys(geojsonCar.features[0].properties || {});
+      setCarLocalInfo(
+        `Base CAR local importada com sucesso.\n` +
+        `Arquivo: ${arquivo.name}\n` +
+        `Feições: ${geojsonCar.features.length}\n` +
+        `Campos detectados: ${campos.slice(0, 35).join(", ")}`
+      );
+
+      if (geojsonAtual?.features?.length) {
+        setTimeout(() => executarAnaliseAutomaticaDoPerimetro(geojsonAtual), 250);
+      }
+    } catch (error) {
+      console.error(error);
+      alert(`Erro ao importar base CAR local: ${error.message}`);
+      setCarLocalInfo(`Erro ao importar base CAR local: ${error.message}`);
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function importarBaseIntermatLocal(event) {
+    const arquivo = event.target.files?.[0];
+    if (!arquivo) return;
+
+    try {
+      setIntermatLocalInfo("Importando base INTERMAT...");
+
+      let geojson = null;
+      const nome = arquivo.name.toLowerCase();
+
+      if (nome.endsWith(".zip")) {
+        const buffer = await arquivo.arrayBuffer();
+        const resultado = await shp(buffer);
+        geojson = normalizarGeojsonImportado(resultado);
+      } else if (nome.endsWith(".geojson") || nome.endsWith(".json")) {
+        const texto = await arquivo.text();
+        geojson = JSON.parse(texto);
+      } else {
+        alert("Para importar base INTERMAT, use ZIP de Shapefile ou GeoJSON.");
+        return;
+      }
+
+      if (!geojson?.features?.length) {
+        alert("A base INTERMAT não possui feições válidas.");
+        return;
+      }
+
+      const intermatNormalizado = {
+        type: "FeatureCollection",
+        features: (geojson.features || []).map(normalizarAtributosIntermatFeature)
+      };
+
+      const indiceIntermat = {};
+      for (const feature of intermatNormalizado.features) {
+        const r = resumirFeatureIntermat(feature);
+        const chave = normalizarChaveIntermat(r.codigo);
+        if (chave) indiceIntermat[chave] = r;
+      }
+
+      setIntermatLocalGeojson(intermatNormalizado);
+      setIntermatIndex(indiceIntermat);
+      setIntermatLocalNome(arquivo.name);
+
+      const campos = Object.keys(intermatNormalizado.features[0].properties || {});
+      const resumo = resumirFeatureIntermat(intermatNormalizado.features[0]);
+
+      setIntermatLocalInfo(
+        `Base INTERMAT importada com sucesso.\n` +
+        `Arquivo: ${arquivo.name}\n` +
+        `Feições: ${intermatNormalizado.features.length}\n` +
+        `Campos detectados: ${campos.slice(0, 35).join(", ")}\n\n` +
+        `Primeiro título/propriedade:\n` +
+        `Código: ${resumo.codigo || "-"}\n` +
+        `Título primitivo: ${resumo.tituloPrimitivo || "-"}\n` +
+        `Fazenda/denominação: ${resumo.nomeFazenda || "-"}\n` +
+        `Registro: ${resumo.registro || "-"}`
+      );
+
+      if (geojsonAtual?.features?.length) {
+        setTimeout(() => executarAnaliseAutomaticaDoPerimetro(geojsonAtual), 250);
+      }
+    } catch (error) {
+      console.error(error);
+      alert(`Erro ao importar base INTERMAT: ${error.message}`);
+      setIntermatLocalInfo(`Erro ao importar base INTERMAT: ${error.message}`);
+    } finally {
+      event.target.value = "";
+    }
   }
 
   function buscarSigefNaBaseLocal() {
@@ -983,6 +1655,24 @@ function normalizarComparacao(valor) {
     }
   }
 
+
+  function nomeCarParaRelatorio(item) {
+    if (!item || item.origem !== "CAR") return item?.nome || "-";
+    const nome = item.nome && item.nome !== item.codigo ? item.nome : "Nome do imóvel não informado na base CAR";
+    return `${item.codigo || "-"} / ${nome}`;
+  }
+
+  function identificacaoRelatorio(item) {
+    if (!item) return "-";
+    if (item.origem === "INTERMAT") {
+      return `Titular: ${nomeIntermatParaRelatorio(item)} | Fazenda: ${fazendaIntermatParaRelatorio(item)}`;
+    }
+    if (item.origem === "CAR") {
+      return nomeCarParaRelatorio(item);
+    }
+    return item.nome && item.nome !== "-" ? `${item.codigo || "-"} / ${item.nome}` : (item.codigo || "-");
+  }
+
   function desenharSobreposicoesNoMapa(resumo) {
     const map = mapRef.current;
     if (!map || !resumo?.feicoesSobrepostas?.features?.length) return;
@@ -999,7 +1689,7 @@ function normalizarComparacao(valor) {
           weight: 2,
           opacity: 0.95,
           fillColor: cor,
-          fillOpacity: 0.22,
+          fillOpacity: 0.08,
         };
       },
       onEachFeature: (feature, camada) => {
@@ -1023,7 +1713,7 @@ function normalizarComparacao(valor) {
             weight: 4,
             opacity: 1,
             fillColor: cor,
-            fillOpacity: 0.48,
+            fillOpacity: 0.10,
           };
         },
       }).addTo(grupo);
@@ -1037,7 +1727,7 @@ function normalizarComparacao(valor) {
       const itens = resumo.resultados.slice(0, 12).map((r, idx) => `
         <div class="legend-item">
           <span class="legend-color" style="background:${r.cor}"></span>
-          <span>${idx + 1}. ${r.origem} — ${String(r.nome || r.codigo || "-").slice(0, 32)}</span>
+          <span>${idx + 1}. ${r.origem} — ${String(identificacaoRelatorio(r)).slice(0, 44)}</span>
         </div>
       `).join("");
       div.innerHTML = `<strong>Sobreposições</strong>${itens}`;
@@ -1052,16 +1742,130 @@ function normalizarComparacao(valor) {
     } catch {}
   }
 
+
+  function resolverDadosIntermat(featureOuProps) {
+    const props = featureOuProps?.properties || featureOuProps || {};
+    const codigo = normalizarChaveIntermat(
+      props.__codigo || props.PROP_CODIGO || props.PROP_CODIG || props.CODIGO || props.codigo || props.ID || props.id
+    );
+
+    if (codigo && intermatIndex[codigo]) {
+      return intermatIndex[codigo];
+    }
+
+    const direto = resumirFeatureIntermat({ properties: props });
+    const titulo = String(direto.tituloPrimitivo || "").trim();
+
+    if (titulo && !/^INTERMAT\s+\d+$/i.test(titulo) && titulo !== "TÍTULO NÃO IDENTIFICADO") {
+      return direto;
+    }
+
+    for (const feature of intermatLocalGeojson?.features || []) {
+      const p = feature.properties || {};
+      const c = normalizarChaveIntermat(p.__codigo || p.PROP_CODIGO || p.PROP_CODIG || p.codigo || p.CODIGO);
+      if (codigo && c === codigo) return resumirFeatureIntermat(feature);
+    }
+
+    return direto;
+  }
+
+  function nomeIntermatParaRelatorio(item) {
+    if (!item || item.origem !== "INTERMAT") return item?.nome || "-";
+    const codigo = normalizarChaveIntermat(item.codigo || item.__codigo || item.PROP_CODIG);
+
+    // 1) Procura diretamente na base INTERMAT importada atual. Isso evita usar camada antiga em memória.
+    for (const feature of intermatLocalGeojson?.features || []) {
+      const p = feature.properties || {};
+      const c = normalizarChaveIntermat(p.__codigo || p.PROP_CODIGO || p.PROP_CODIG || p.CODIGO || p.codigo);
+      if (codigo && c === codigo) {
+        return p.__tituloPrimitivo || p.PROP_REQUE || p.prop_reque || p.PROP_REQUERC || p.prop_requerc || p.__nomeFazenda || p.PROP_DENOM || p.prop_denom || `INTERMAT ${codigo}`;
+      }
+    }
+
+    // 2) Usa índice se existir.
+    if (codigo && intermatIndex[codigo]) {
+      return intermatIndex[codigo].tituloPrimitivo || intermatIndex[codigo].nomeFazenda || `INTERMAT ${codigo}`;
+    }
+
+    // 3) Fallback nos próprios dados do item.
+    const dados = resolverDadosIntermat({
+      __codigo: codigo || item.codigo,
+      __tituloPrimitivo: item.tituloPrimitivo,
+      __nomeFazenda: item.nomeFazenda,
+      __nome: item.nome,
+      PROP_CODIG: codigo || item.codigo,
+    });
+
+    return dados.tituloPrimitivo || item.tituloPrimitivo || item.nome || `INTERMAT ${codigo || ""}`.trim();
+  }
+
+  function fazendaIntermatParaRelatorio(item) {
+    if (!item || item.origem !== "INTERMAT") return item?.nomeFazenda || "-";
+    const codigo = normalizarChaveIntermat(item.codigo || item.__codigo || item.PROP_CODIG);
+
+    for (const feature of intermatLocalGeojson?.features || []) {
+      const p = feature.properties || {};
+      const c = normalizarChaveIntermat(p.__codigo || p.PROP_CODIGO || p.PROP_CODIG || p.CODIGO || p.codigo);
+      if (codigo && c === codigo) {
+        return p.__nomeFazenda || p.PROP_DENOM || p.prop_denom || p.PROP_DENOMI || p.prop_denomi || p.DENOMINACAO || p.denominacao || "Fazenda/denominação não informada na base INTERMAT";
+      }
+    }
+
+    if (codigo && intermatIndex[codigo]) {
+      return intermatIndex[codigo].nomeFazenda || "Fazenda/denominação não informada na base INTERMAT";
+    }
+
+    const dados = resolverDadosIntermat({
+      __codigo: codigo || item.codigo,
+      __nomeFazenda: item.nomeFazenda,
+      __tituloPrimitivo: item.tituloPrimitivo,
+      PROP_CODIG: codigo || item.codigo,
+    });
+
+    return dados.nomeFazenda || item.nomeFazenda || "Fazenda/denominação não informada na base INTERMAT";
+  }
+
   function executarAnaliseSobreposicao() {
     const base = geojsonAtual;
-    if (!base?.features?.length) {
-      alert("Carregue, consulte ou desenhe primeiro um perímetro base e clique em 'Usar feição como perímetro atual', quando necessário.");
+    const perimetroFeature = obterFeaturePerimetro(base);
+
+    if (!base?.features?.length || !perimetroFeature) {
+      alert("Carregue, consulte ou desenhe primeiro um perímetro base.");
       return;
     }
 
     const candidatos = [];
 
-    if (sigefLocalGeojson?.features?.length) {
+    // Preferência 1: usar as camadas automáticas já cruzadas/desenhadas.
+    if (basesAnaliseAtivas.car) {
+      for (const feature of autoCarGeojson?.features || []) {
+        candidatos.push({ origem: "CAR", feature });
+      }
+    }
+
+    if (basesAnaliseAtivas.sigef) {
+      for (const feature of autoSigefGeojson?.features || []) {
+        candidatos.push({ origem: "SIGEF LOCAL", feature });
+      }
+    }
+
+    if (intermatLocalGeojson?.features?.length) {
+      const bboxIntermat = turf.bboxPolygon(bboxComFolga(base, 0.10));
+      for (const feature of intermatLocalGeojson.features) {
+        try {
+          if (feature?.geometry && turf.booleanIntersects(bboxIntermat, feature)) {
+            candidatos.push({ origem: "INTERMAT", feature: normalizarAtributosIntermatFeature(feature) });
+          }
+        } catch {}
+      }
+    } else {
+      for (const feature of autoIntermatGeojson?.features || []) {
+        candidatos.push({ origem: "INTERMAT", feature: normalizarAtributosIntermatFeature(feature) });
+      }
+    }
+
+    // Preferência 2: se ainda não houver análise automática, usa as bases brutas carregadas.
+    if (basesAnaliseAtivas.sigef && candidatos.length === 0 && sigefLocalGeojson?.features?.length) {
       for (const feature of sigefLocalGeojson.features) {
         candidatos.push({ origem: "SIGEF LOCAL", feature });
       }
@@ -1074,7 +1878,7 @@ function normalizarComparacao(valor) {
     }
 
     if (candidatos.length === 0) {
-      alert("Não há base SIGEF local ou feição CAR/SIGEF consultada para cruzar com o perímetro atual.");
+      alert("Não há base ativa para cruzar com o perímetro atual. Ligue CAR, SIGEF ou INTERMAT, ou importe uma base antes de executar.");
       return;
     }
 
@@ -1082,12 +1886,12 @@ function normalizarComparacao(valor) {
 
     setTimeout(() => {
       try {
-        const baseFeatures = base.features || [];
-        const areaBaseHa = turf.area(base) / 10000;
-        const bboxBase = turf.bbox(base);
+        const areaBaseHa = turf.area(perimetroFeature) / 10000;
+        const bboxBase = turf.bbox(perimetroFeature);
         const resultados = [];
         const geometriasIntersecao = [];
         const feicoesSobrepostas = [];
+        const usados = new Set();
 
         for (const item of candidatos) {
           const f = item.feature;
@@ -1102,62 +1906,133 @@ function normalizarComparacao(valor) {
 
           if (!bboxSobrepoe(bboxBase, bboxCandidato)) continue;
 
-          let areaSobreposta = 0;
-          const partesIntersecao = [];
+          const calculoRobusto = calcularIntersecaoRobusta(perimetroFeature, f);
+          const interGeom = calculoRobusto.inter;
+          let areaSobreposta = calculoRobusto.areaHa || Number(f.properties?.__areaSobrepostaHa || 0);
 
-          for (const bf of baseFeatures) {
-            const inter = calcularIntersecaoEntreFeatures(bf, f);
-            if (inter.areaHa > 0.000001) {
-              areaSobreposta += inter.areaHa;
-              if (inter.geometry) partesIntersecao.push(inter.geometry);
-            }
+          if (areaSobreposta <= 0.0001) continue;
+
+          const p = f.properties || {};
+          const chave = `${item.origem}-${p.__codigo || p.parcela_co || p.PARCELA_CO || p.cod_imovel || p.COD_IMOVEL || p.PROP_CODIG || JSON.stringify(turf.bbox(f))}`;
+          if (usados.has(chave)) continue;
+          usados.add(chave);
+
+          let atributos;
+          if (item.origem === "INTERMAT") {
+            const r = resolverDadosIntermat({ ...f.properties, ...p });
+            atributos = {
+              codigo: p.__codigo || r.codigo || p.PROP_LOCAL || "-",
+              sncr: "-",
+              nome: r.tituloPrimitivo || p.__tituloPrimitivo || p.__nome || "TÍTULO NÃO IDENTIFICADO",
+              nomeFazenda: r.nomeFazenda || p.__nomeFazenda || "-",
+              matricula: p.__matricula || r.matricula || "-",
+              municipio: p.__municipio || r.municipio || "-",
+              status: p.__status || r.origem || "-",
+              requerente: p.__requerente || r.requerente || "-",
+              registro: p.__registro || r.registro || "-",
+              livro: p.__livro || r.livro || "-",
+              folha: p.__folha || r.folha || "-",
+              areaTituloHa: p.__areaTituloHa || numeroPtBr(r.areaTitulo),
+            };
+          } else {
+            const r = extrairAtributosParcela(f, item.origem);
+            atributos = {
+              codigo: p.__codigo || r.codigo || "-",
+              sncr: p.__sncr || r.sncr || "-",
+              nome: r.nome || p.__nome || "-",
+              matricula: p.__matricula || r.matricula || "-",
+              municipio: p.__municipio || r.municipio || "-",
+              status: p.__status || r.status || "-",
+              requerente: p.__requerente || "-",
+              registro: p.__registro || "-",
+              livro: p.__livro || "-",
+              folha: p.__folha || "-",
+              areaTituloHa: p.__areaTituloHa || 0,
+            };
           }
 
-          if (areaSobreposta > 0.0001) {
-            const areaParcelaHa = turf.area(featureCollectionDeUma(f)) / 10000;
-            const atributos = extrairAtributosParcela(f, item.origem);
+          const areaParcelaHa = turf.area(featureCollectionDeUma(f)) / 10000;
+          const indiceResultado = resultados.length;
+          const cor = p.__cor || corSobreposicao(indiceResultado);
+          const percentualBase = areaBaseHa > 0 ? (areaSobreposta / areaBaseHa) * 100 : 0;
+          const percentualParcela = areaParcelaHa > 0 ? (areaSobreposta / areaParcelaHa) * 100 : 0;
+          const percentualTitulo = atributos.areaTituloHa > 0 ? (areaSobreposta / atributos.areaTituloHa) * 100 : 0;
 
-            const indiceResultado = resultados.length;
-            const cor = corSobreposicao(indiceResultado);
-            const resultadoItem = {
-              id: `${item.origem}-${indiceResultado + 1}`,
-              origem: item.origem,
-              codigo: atributos.codigo,
-              sncr: atributos.sncr,
-              nome: atributos.nome,
-              matricula: atributos.matricula,
-              municipio: atributos.municipio,
-              status: atributos.status,
-              cor,
-              areaParcelaHa: Number(areaParcelaHa.toFixed(4)),
-              areaSobrepostaHa: Number(areaSobreposta.toFixed(4)),
-              percentualSobreBase: Number(((areaSobreposta / areaBaseHa) * 100).toFixed(4)),
-              percentualSobreParcela: areaParcelaHa > 0 ? Number(((areaSobreposta / areaParcelaHa) * 100).toFixed(4)) : 0,
-            };
+          const resultadoItem = {
+            id: `${item.origem}-${indiceResultado + 1}`,
+            origem: item.origem,
+            codigo: atributos.codigo,
+            sncr: atributos.sncr,
+            nome: atributos.nome,
+            tituloPrimitivo: item.origem === "INTERMAT" ? atributos.nome : "-",
+            nomeFazenda: item.origem === "INTERMAT" ? (atributos.nomeFazenda || "Fazenda/denominação não informada na base INTERMAT") : (item.origem === "CAR" ? atributos.nome : "-"),
+            matricula: atributos.matricula,
+            municipio: atributos.municipio,
+            status: atributos.status,
+            requerente: atributos.requerente,
+            registro: atributos.registro,
+            livro: atributos.livro,
+            folha: atributos.folha,
+            cor,
+            areaParcelaHa: Number(areaParcelaHa.toFixed(4)),
+            areaTituloHa: Number((atributos.areaTituloHa || 0).toFixed(4)),
+            areaSobrepostaHa: Number(areaSobreposta.toFixed(4)),
+            percentualSobreBase: Number(percentualBase.toFixed(4)),
+            percentualSobreParcela: Number(percentualParcela.toFixed(4)),
+            percentualSobreTitulo: Number(percentualTitulo.toFixed(4)),
+            metodoIntersecao: calculoRobusto.metodo,
+          };
 
-            resultados.push(resultadoItem);
+          resultados.push(resultadoItem);
 
-            feicoesSobrepostas.push({
-              type: "Feature",
-              geometry: f.geometry,
+          feicoesSobrepostas.push({
+            type: "Feature",
+            geometry: f.geometry,
+            properties: {
+              ...resultadoItem,
+              area_sobreposta_ha: resultadoItem.areaSobrepostaHa,
+              percentual_base: resultadoItem.percentualSobreBase,
+            },
+          });
+
+          if (interGeom?.geometry) {
+            geometriasIntersecao.push({
+              ...interGeom,
               properties: {
-                ...resultadoItem,
-                area_sobreposta_ha: resultadoItem.areaSobrepostaHa,
-                percentual_base: resultadoItem.percentualSobreBase,
+                origem: item.origem,
+                codigo: atributos.codigo,
+                nome: atributos.nome,
+                tituloPrimitivo: atributos.tituloPrimitivo || atributos.nome,
+                nomeFazenda: atributos.nomeFazenda || "-",
+                sncr: atributos.sncr,
+                matricula: atributos.matricula,
+                municipio: atributos.municipio,
+                status: atributos.status,
+                requerente: atributos.requerente,
+                registro: atributos.registro,
+                livro: atributos.livro,
+                folha: atributos.folha,
+                __origem: item.origem,
+                __codigo: atributos.codigo,
+                __nome: atributos.nome,
+                __tituloPrimitivo: atributos.tituloPrimitivo || atributos.nome,
+                __nomeFazenda: atributos.nomeFazenda || "-",
+                __sncr: atributos.sncr,
+                __matricula: atributos.matricula,
+                __municipio: atributos.municipio,
+                __status: atributos.status,
+                __requerente: atributos.requerente,
+                __registro: atributos.registro,
+                __livro: atributos.livro,
+                __folha: atributos.folha,
+                __areaSobrepostaHa: Number(areaSobreposta.toFixed(4)),
+                __percentualBase: Number(percentualBase.toFixed(4)),
+                __percentualTitulo: Number(percentualTitulo.toFixed(4)),
+                __cor: cor,
+                cor,
+                area_ha: Number(areaSobreposta.toFixed(4)),
               },
             });
-
-            for (const geom of partesIntersecao) {
-              geometriasIntersecao.push({
-                ...geom,
-                properties: {
-                  origem: item.origem,
-                  codigo: atributos.codigo,
-                  cor,
-                  area_ha: Number(areaSobreposta.toFixed(4)),
-                },
-              });
-            }
           }
         }
 
@@ -1177,11 +2052,17 @@ function normalizarComparacao(valor) {
 
         setAnaliseSobreposicao(resumo);
         desenharSobreposicoesNoMapa(resumo);
+        setTimeout(() => destacarPerimetroAnalise(), 150);
+
+        const detalhado = montarResultadoAutomaticoParaRelatorio?.();
+        if (detalhado) {
+          setResultadoSobreposicaoDetalhado(detalhado);
+        }
 
         if (resultados.length === 0) {
           setResultadoConsulta("Análise concluída: nenhuma sobreposição foi identificada com as bases carregadas.");
         } else {
-          setResultadoConsulta(`Análise concluída: ${resultados.length} sobreposição(ões) identificada(s). Área total sobreposta: ${numeroBR(totalSobreposto)} ha.`);
+          setResultadoConsulta(`Análise concluída: ${resultados.length} sobreposição(ões) identificada(s). Área total sobreposta: ${numeroBR(totalSobreposto)} ha. Motor robusto aplicado ao perímetro normalizado.`);
         }
       } finally {
         setAnalisandoSobreposicao(false);
@@ -1203,6 +2084,1566 @@ function normalizarComparacao(valor) {
       return await resposta.arrayBuffer();
     } catch {
       return null;
+    }
+  }
+  function hexToRgba(hex, alpha = 0.2) {
+    const normal = String(hex || "#2563eb").replace("#", "");
+    const bigint = parseInt(normal.length === 3 ? normal.split("").map((c) => c + c).join("") : normal, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function nomeCurtoLegendaRelatorio(r) {
+    if (!r) return "-";
+    if (r.origem === "INTERMAT") return nomeIntermatParaRelatorio(r);
+    if (r.origem === "CAR") return r.nomeFazenda || r.nome || r.codigo || "CAR";
+    if (r.origem === "SIGEF LOCAL") return r.nome || r.nomeFazenda || r.codigo || "SIGEF";
+    return r.nome || r.codigo || "-";
+  }function desenharLegendaRelatorioNoCanvas(ctx, boxX = 24, boxY = 24, maxItens = 8) {
+    const itens = (analiseSobreposicao?.resultados || []).slice(0, maxItens);
+    if (!itens.length) return;
+
+    const boxW = 640;
+    const lineH = 23;
+    const boxH = 48 + itens.length * lineH;
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.strokeStyle = "rgba(15, 76, 92, 0.85)";
+    ctx.lineWidth = 2;
+
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxW, boxH, 10);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
+    }
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 21px Arial";
+    ctx.fillText("Legenda técnica", boxX + 16, boxY + 30);
+
+    ctx.font = "15px Arial";
+    itens.forEach((r, idx) => {
+      const yy = boxY + 60 + idx * lineH;
+      ctx.fillStyle = r.cor || corSobreposicao(idx);
+      ctx.fillRect(boxX + 16, yy - 13, 16, 16);
+      ctx.strokeStyle = "#333333";
+      ctx.strokeRect(boxX + 16, yy - 13, 16, 16);
+
+      const area = Number(r.areaSobrepostaHa || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+      const texto = `${idx + 1}. ${r.origem || ""} — ${String(nomeCurtoLegendaRelatorio(r)).slice(0, 44)} (${area} ha)`;
+      ctx.fillStyle = "#111827";
+      ctx.fillText(texto, boxX + 42, yy);
+    });
+  }
+
+  function desenharMapaTecnicoFallback(ctx, larguraFinal, alturaFinal) {
+    const resultados = analiseSobreposicao?.resultados || [];
+    const maxArea = Math.max(...resultados.map((r) => Number(r.areaSobrepostaHa || 0)), 1);
+
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(0, 0, larguraFinal, alturaFinal);
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 36px Arial";
+    ctx.fillText("Mapa técnico de sobreposição", 44, 62);
+
+    ctx.fillStyle = "#334155";
+    ctx.font = "20px Arial";
+    ctx.fillText("Representação visual das feições interceptadas pelo perímetro analisado.", 44, 96);
+
+    const mapaX = 80;
+    const mapaY = 145;
+    const mapaW = larguraFinal - 160;
+    const mapaH = alturaFinal - 285;
+
+    ctx.fillStyle = "#eef6ef";
+    ctx.fillRect(mapaX, mapaY, mapaW, mapaH);
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(mapaX, mapaY, mapaW, mapaH);
+
+    // Perímetro base
+    ctx.fillStyle = "rgba(34, 197, 94, 0.10)";
+    ctx.strokeStyle = "#14532d";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(mapaX + mapaW * 0.18, mapaY + mapaH * 0.24);
+    ctx.lineTo(mapaX + mapaW * 0.78, mapaY + mapaH * 0.16);
+    ctx.lineTo(mapaX + mapaW * 0.86, mapaY + mapaH * 0.68);
+    ctx.lineTo(mapaX + mapaW * 0.33, mapaY + mapaH * 0.82);
+    ctx.lineTo(mapaX + mapaW * 0.18, mapaY + mapaH * 0.24);
+    ctx.fill();
+    ctx.stroke();
+
+    resultados.slice(0, 12).forEach((r, idx) => {
+      const area = Number(r.areaSobrepostaHa || 0);
+      const escala = Math.max(0.22, Math.min(1, area / maxArea));
+      const w = mapaW * (0.18 + escala * 0.24);
+      const h = mapaH * (0.12 + escala * 0.20);
+      const x = mapaX + mapaW * (0.10 + (idx % 4) * 0.20);
+      const y = mapaY + mapaH * (0.14 + Math.floor(idx / 4) * 0.22);
+
+      ctx.fillStyle = hexToRgba(r.cor || corSobreposicao(idx), 0.18);
+      ctx.strokeStyle = r.cor || corSobreposicao(idx);
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#111827";
+      ctx.font = "bold 18px Arial";
+      ctx.fillText(String(idx + 1), x + 8, y + 24);
+    });
+
+    desenharLegendaRelatorioNoCanvas(ctx, 95, alturaFinal - 185, 8);
+  }function gerarMapaFallbackRelatorio() {
+    const larguraFinal = 2000;
+    const alturaFinal = 1125;
+    const canvas = document.createElement("canvas");
+    canvas.width = larguraFinal;
+    canvas.height = alturaFinal;
+    const ctx = canvas.getContext("2d");
+
+    desenharMapaTecnicoFallback(ctx, larguraFinal, alturaFinal);
+
+    ctx.strokeStyle = "#0f4c5c";
+    ctx.lineWidth = 5;
+    ctx.strokeRect(8, 8, larguraFinal - 16, alturaFinal - 16);
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.fillRect(0, alturaFinal - 46, larguraFinal, 46);
+    ctx.fillStyle = "#1f2937";
+    ctx.font = "18px Arial";
+    ctx.fillText(`Longitude Geo Intelligence • Data: ${hojeBR()} • Mapa técnico explicativo de sobreposição`, 30, alturaFinal - 17);
+
+    const dataUrl = canvas.toDataURL("image/png", 1.0);
+    setMapaRelatorioDataUrl(dataUrl);
+    return dataUrl;
+  }async function capturarMapaComoImagem() {
+    const mapElement = document.getElementById("map") || document.querySelector(".leaflet-container");
+
+    if (!mapElement) {
+      return gerarMapaFallbackRelatorio();
+    }
+
+    const elementosOcultados = [];
+    const estilosAlterados = [];
+
+    try {
+      if (mapRef.current) {
+        mapRef.current.invalidateSize(true);
+
+        const prioridade = [overlapLayerRef.current, geoLayerRef.current].filter(Boolean);
+        const secundarios = [autoCarLayerRef.current, autoSigefLayerRef.current, autoIntermatLayerRef.current].filter(Boolean);
+        const grupos = prioridade.length ? prioridade : secundarios;
+
+        const bounds = grupos.map((g) => {
+          try { return g.getBounds?.(); } catch { return null; }
+        }).filter((b) => b && b.isValid && b.isValid());
+
+        if (bounds.length) {
+          let total = bounds[0];
+          bounds.slice(1).forEach((b) => total.extend(b));
+          mapRef.current.fitBounds(total, { padding: [4, 4], animate: false });
+        }
+      }
+
+      const ocultarSeletores = [
+        ".leaflet-control-zoom",
+        ".leaflet-draw",
+        ".leaflet-control-attribution",
+        ".leaflet-control-layers",
+        ".map-legend",
+        ".leaflet-control",
+        ".leaflet-overlap-legend"
+      ];
+
+      ocultarSeletores.forEach((selector) => {
+        mapElement.querySelectorAll(selector).forEach((el) => {
+          elementosOcultados.push({ el, display: el.style.display });
+          el.style.display = "none";
+        });
+      });
+
+      mapElement.querySelectorAll(".leaflet-overlay-pane path").forEach((el) => {
+        estilosAlterados.push({
+          el,
+          fillOpacity: el.getAttribute("fill-opacity"),
+          strokeOpacity: el.getAttribute("stroke-opacity"),
+          strokeWidth: el.getAttribute("stroke-width"),
+        });
+        el.setAttribute("fill-opacity", "0.13");
+        el.setAttribute("stroke-opacity", "0.98");
+        el.setAttribute("stroke-width", "3");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+
+      const largura = Math.max(mapElement.clientWidth || 1100, 1100);
+      const altura = Math.max(mapElement.clientHeight || 700, 700);
+
+      const capturaOriginal = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 3,
+        logging: false,
+        width: largura,
+        height: altura,
+        windowWidth: document.documentElement.scrollWidth,
+        windowHeight: document.documentElement.scrollHeight,
+      });
+
+      // Ponto principal da V46:
+      // remove a faixa branca que estava indo para o Word.
+      const canvas = recortarAreaUtilCanvas(capturaOriginal);
+
+      const larguraFinal = 2000;
+      const alturaFinal = 1125;
+      const saida = document.createElement("canvas");
+      saida.width = larguraFinal;
+      saida.height = alturaFinal;
+      const ctx = saida.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, larguraFinal, alturaFinal);
+
+      // COVER: preenche toda a página. Como já recortamos o branco, não sobra área vazia.
+      const escala = Math.max(larguraFinal / canvas.width, alturaFinal / canvas.height);
+      const w = canvas.width * escala;
+      const h = canvas.height * escala;
+      const x = (larguraFinal - w) / 2;
+      const y = (alturaFinal - h) / 2;
+
+      ctx.drawImage(canvas, x, y, w, h);
+
+      ctx.strokeStyle = "#0f4c5c";
+      ctx.lineWidth = 5;
+      ctx.strokeRect(8, 8, larguraFinal - 16, alturaFinal - 16);
+
+      desenharLegendaRelatorioNoCanvas(ctx, 28, 28, 8);
+
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fillRect(0, alturaFinal - 46, larguraFinal, 46);
+      ctx.fillStyle = "#1f2937";
+      ctx.font = "18px Arial";
+      ctx.fillText(`Longitude Geo Intelligence • Data: ${hojeBR()} • Mapa técnico ampliado de sobreposição`, 30, alturaFinal - 17);
+
+      const dataUrl = saida.toDataURL("image/png", 1.0);
+      setMapaRelatorioDataUrl(dataUrl);
+      return dataUrl;
+    } catch (error) {
+      console.error("Erro ao capturar mapa para relatório; usando fallback", error);
+      return gerarMapaFallbackRelatorio();
+    } finally {
+      elementosOcultados.forEach(({ el, display }) => {
+        el.style.display = display;
+      });
+
+      estilosAlterados.forEach(({ el, fillOpacity, strokeOpacity, strokeWidth }) => {
+        if (fillOpacity === null) el.removeAttribute("fill-opacity"); else el.setAttribute("fill-opacity", fillOpacity);
+        if (strokeOpacity === null) el.removeAttribute("stroke-opacity"); else el.setAttribute("stroke-opacity", strokeOpacity);
+        if (strokeWidth === null) el.removeAttribute("stroke-width"); else el.setAttribute("stroke-width", strokeWidth);
+      });
+    }
+  }
+
+
+  function destacarPerimetroAnalise() {
+    const map = mapRef.current;
+    const perimetro = obterFeaturePerimetro(geojsonAtual);
+    if (!map || !perimetro) return null;
+
+    try {
+      if (highlightPerimeterLayerRef.current) {
+        map.removeLayer(highlightPerimeterLayerRef.current);
+        highlightPerimeterLayerRef.current = null;
+      }
+    } catch {}
+
+    const layer = L.geoJSON(perimetro, {
+      pane: "markerPane",
+      style: {
+        color: "#ffea00",
+        weight: 8,
+        opacity: 1,
+        fillColor: "#ffea00",
+        fillOpacity: 0.03,
+        dashArray: "10 6",
+      },
+      interactive: false,
+    }).addTo(map);
+
+    highlightPerimeterLayerRef.current = layer;
+    return layer;
+  }
+
+  function desenharNorteEscalaCanvas(ctx, largura, altura) {
+    const x = largura - 110;
+    const y = 95;
+
+    ctx.fillStyle = "rgba(255,255,255,0.90)";
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2;
+
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x - 36, y - 58, 72, 112, 10);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(x - 36, y - 58, 72, 112);
+      ctx.strokeRect(x - 36, y - 58, 72, 112);
+    }
+
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("N", x - 8, y - 32);
+
+    ctx.beginPath();
+    ctx.moveTo(x, y - 18);
+    ctx.lineTo(x - 16, y + 22);
+    ctx.lineTo(x, y + 10);
+    ctx.lineTo(x + 16, y + 22);
+    ctx.closePath();
+    ctx.fill();
+
+    const scaleY = altura - 96;
+    const scaleX = 72;
+    ctx.strokeStyle = "#111827";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(scaleX, scaleY);
+    ctx.lineTo(scaleX + 210, scaleY);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(scaleX, scaleY - 13);
+    ctx.lineTo(scaleX, scaleY + 13);
+    ctx.moveTo(scaleX + 210, scaleY - 13);
+    ctx.lineTo(scaleX + 210, scaleY + 13);
+    ctx.stroke();
+
+    ctx.fillStyle = "#111827";
+    ctx.font = "17px Arial";
+    ctx.fillText("Escala visual aproximada", scaleX, scaleY + 36);
+  }
+
+  function desenharCabecalhoImagemSatelite(ctx, largura) {
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillRect(0, 0, largura, 66);
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 26px Arial";
+    ctx.fillText("Longitude Geo Intelligence — Imagem de Satélite da Análise Territorial", 30, 38);
+
+    ctx.fillStyle = "#334155";
+    ctx.font = "17px Arial";
+    ctx.fillText(`Data de geração: ${hojeBR()} • Perímetro analisado destacado em amarelo`, 30, 59);
+  }
+  function baixarDataUrl(dataUrl, nomeArquivo) {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = nomeArquivo;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function desenharElementosTecnicosImagem(ctx, largura, altura, titulo = "Imagem de satélite da análise") {
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillRect(0, 0, largura, 70);
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 28px Arial";
+    ctx.fillText(`Longitude Geo Intelligence — ${titulo}`, 30, 38);
+
+    ctx.fillStyle = "#334155";
+    ctx.font = "18px Arial";
+    ctx.fillText(`Data: ${hojeBR()} • Perímetro analisado destacado em amarelo`, 30, 61);
+
+    // Norte
+    const x = largura - 100;
+    const y = 115;
+    ctx.fillStyle = "rgba(255,255,255,0.90)";
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x - 34, y - 55, 68, 105, 10);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(x - 34, y - 55, 68, 105);
+      ctx.strokeRect(x - 34, y - 55, 68, 105);
+    }
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("N", x - 8, y - 30);
+    ctx.beginPath();
+    ctx.moveTo(x, y - 16);
+    ctx.lineTo(x - 15, y + 22);
+    ctx.lineTo(x, y + 10);
+    ctx.lineTo(x + 15, y + 22);
+    ctx.closePath();
+    ctx.fill();
+
+    // Rodapé
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fillRect(0, altura - 48, largura, 48);
+    ctx.fillStyle = "#1f2937";
+    ctx.font = "18px Arial";
+    ctx.fillText("Fonte: camada visível no mapa web • Uso técnico preliminar • Conferir em ambiente SIG para peças oficiais", 30, altura - 18);
+  }async function exportarImagemSateliteRecortada(formato = "png") {
+    const map = mapRef.current;
+    const mapElement = document.getElementById("map") || document.querySelector(".leaflet-container");
+
+    if (!map || !mapElement) {
+      alert("Mapa não encontrado para exportação.");
+      return;
+    }
+
+    const perimetro = obterFeaturePerimetro(geojsonAtual);
+    if (!perimetro) {
+      alert("Carregue um perímetro antes de exportar a imagem.");
+      return;
+    }
+
+    const elementosOcultados = [];
+    const estilosAlterados = [];
+
+    try {
+      destacarPerimetroAnalise();
+      map.invalidateSize(true);
+
+      const bounds = L.geoJSON(perimetro).getBounds();
+      if (bounds && bounds.isValid()) {
+        // Enquadra pelo perímetro, com margem técnica para evitar corte.
+        map.fitBounds(bounds, { padding: [90, 90], animate: false });
+        const centro = bounds.getCenter();
+        setTimeout(() => {
+          try { map.panTo(centro, { animate: false }); } catch {}
+        }, 80);
+      }
+
+      const ocultarSeletores = [
+        ".leaflet-control-zoom",
+        ".leaflet-draw",
+        ".leaflet-control-attribution",
+        ".leaflet-control-layers",
+        ".map-legend",
+        ".leaflet-control",
+        ".leaflet-overlap-legend"
+      ];
+
+      ocultarSeletores.forEach((selector) => {
+        mapElement.querySelectorAll(selector).forEach((el) => {
+          elementosOcultados.push({ el, display: el.style.display });
+          el.style.display = "none";
+        });
+      });
+
+      mapElement.querySelectorAll(".leaflet-overlay-pane path").forEach((el) => {
+        estilosAlterados.push({
+          el,
+          fillOpacity: el.getAttribute("fill-opacity"),
+          strokeOpacity: el.getAttribute("stroke-opacity"),
+          strokeWidth: el.getAttribute("stroke-width"),
+        });
+
+        el.setAttribute("fill-opacity", "0.08");
+        el.setAttribute("stroke-opacity", "0.98");
+        el.setAttribute("stroke-width", "3");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 1700));
+
+      const captura = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 3,
+        logging: false,
+        width: mapElement.clientWidth,
+        height: mapElement.clientHeight,
+      });
+
+      const canvasUtil = typeof recortarAreaUtilCanvas === "function" ? recortarAreaUtilCanvas(captura) : captura;
+
+      // V49: saída dinâmica, preservando a proporção do mapa útil.
+      // Isso elimina deslocamento e corte causados por composição tipo "cover".
+      const outW = 2000;
+      const margemTopo = 72;
+      const margemRodape = 52;
+      const mapaW = outW;
+      const mapaH = Math.round(outW * (canvasUtil.height / canvasUtil.width));
+      const outH = margemTopo + mapaH + margemRodape;
+
+      const saida = document.createElement("canvas");
+      saida.width = outW;
+      saida.height = outH;
+      const ctx = saida.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, outW, outH);
+
+      // Preserva proporção sem cortar. O mapa ocupa a largura total.
+      ctx.drawImage(canvasUtil, 0, margemTopo, mapaW, mapaH);
+
+      // Moldura técnica discreta. Não usar amarelo para não confundir com o perímetro real.
+      ctx.strokeStyle = "#0f4c5c";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(10, margemTopo + 10, outW - 20, mapaH - 20);
+
+      if (typeof desenharLegendaRelatorioNoCanvas === "function") {
+        desenharLegendaExportacaoImagem(ctx, 30, margemTopo + 18, 10);
+      }
+
+      desenharElementosTecnicosImagem(ctx, outW, outH, "Imagem de satélite da análise territorial");
+
+      const mime = formato === "jpg" || formato === "jpeg" ? "image/jpeg" : "image/png";
+      const extensao = mime === "image/jpeg" ? "jpg" : "png";
+      const dataUrl = saida.toDataURL(mime, mime === "image/jpeg" ? 0.95 : 1.0);
+
+      baixarDataUrl(dataUrl, `imagem_satelite_sobreposicao_${new Date().toISOString().slice(0,10)}.${extensao}`);
+    } catch (error) {
+      console.error("Erro ao exportar imagem", error);
+      alert(`Erro ao exportar imagem: ${error.message}`);
+    } finally {
+      elementosOcultados.forEach(({ el, display }) => {
+        el.style.display = display;
+      });
+
+      estilosAlterados.forEach(({ el, fillOpacity, strokeOpacity, strokeWidth }) => {
+        if (fillOpacity === null) el.removeAttribute("fill-opacity"); else el.setAttribute("fill-opacity", fillOpacity);
+        if (strokeOpacity === null) el.removeAttribute("stroke-opacity"); else el.setAttribute("stroke-opacity", strokeOpacity);
+        if (strokeWidth === null) el.removeAttribute("stroke-width"); else el.setAttribute("stroke-width", strokeWidth);
+      });
+    }
+  }  function perguntarOpcoesImagemSatelite() {
+    const modoResposta = window.prompt(
+      "Exportar imagem com quais informações?\n\n1 = Com todas as feições da análise\n2 = Somente com o perímetro analisado\n\nDigite 1 ou 2:",
+      "1"
+    );
+
+    if (modoResposta === null) return null;
+
+    const somentePerimetro = String(modoResposta).trim() === "2";
+
+    const fonteResposta = window.prompt(
+      "Escolha a fonte da imagem de satélite:\n\n1 = Esri World Imagery (atual/padrão)\n2 = Google Satélite (experimental)\n3 = Bing Satélite (experimental)\n\nDigite 1, 2 ou 3:",
+      "1"
+    );
+
+    if (fonteResposta === null) return null;
+
+    const fonteTexto = String(fonteResposta).trim();
+    const fonte = fonteTexto === "2" ? "google" : fonteTexto === "3" ? "bing" : "esri";
+
+    return { somentePerimetro, fonte };
+  }  function criarCamadaSatelitePorFonte(fonte) {
+    if (fonte === "google") {
+      return L.tileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
+        attribution: "Imagem: Google Satellite",
+        maxZoom: 21,
+        crossOrigin: true,
+      });
+    }
+
+    if (fonte === "bing") {
+      const BingLayer = L.TileLayer.extend({
+        getTileUrl: function(coords) {
+          const q = quadKeyBing(coords.x, coords.y, coords.z);
+          const sub = ["0", "1", "2", "3"][Math.abs(coords.x + coords.y) % 4];
+          return `https://ecn.t${sub}.tiles.virtualearth.net/tiles/a${q}.jpeg?g=129&mkt=pt-BR&n=z`;
+        },
+        options: {
+          attribution: "Imagem: Bing Maps",
+          maxZoom: 21,
+          crossOrigin: true,
+        }
+      });
+      return new BingLayer();
+    }
+
+    return L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Imagem: Esri World Imagery",
+      maxZoom: 20,
+      crossOrigin: true,
+    });
+  }  function nomeFonteSatelite(fonte) {
+    if (fonte === "google") return "Google Satellite";
+    if (fonte === "bing") return "Bing Maps Satellite";
+    return "Esri World Imagery";
+  }async function exportarImagemSateliteRecortada(formato = "png") {
+    const opcoes = perguntarOpcoesImagemSatelite();
+    if (!opcoes) return;
+
+    const { somentePerimetro, fonte } = opcoes;
+
+    const map = mapRef.current;
+    const mapElement = document.getElementById("map") || document.querySelector(".leaflet-container");
+
+    if (!map || !mapElement) {
+      alert("Mapa não encontrado para exportação.");
+      return;
+    }
+
+    const perimetro = obterFeaturePerimetro(geojsonAtual);
+    if (!perimetro) {
+      alert("Carregue um perímetro antes de exportar a imagem.");
+      return;
+    }
+
+    const elementosOcultados = [];
+    const estilosAlterados = [];
+    const layersRemovidos = [];
+    let camadaExportacao = null;
+
+    try {
+      destacarPerimetroAnalise();
+      map.invalidateSize(true);
+
+      layersRemovidos.push(...removerTileLayersBase(map));
+
+      camadaExportacao = criarCamadaSatelitePorFonte(fonte);
+      camadaExportacao.addTo(map);
+      try { camadaExportacao.bringToBack(); } catch {}
+
+      if (somentePerimetro) {
+        [overlapLayerRef.current, autoCarLayerRef.current, autoSigefLayerRef.current, autoIntermatLayerRef.current]
+          .filter(Boolean)
+          .forEach((layer) => {
+            try {
+              if (map.hasLayer(layer)) {
+                map.removeLayer(layer);
+                layersRemovidos.push(layer);
+              }
+            } catch {}
+          });
+      }
+
+      enquadrarPerimetroParaExportacao(perimetro);
+
+      const ocultarSeletores = [
+        ".leaflet-control-zoom",
+        ".leaflet-draw",
+        ".leaflet-control-attribution",
+        ".leaflet-control-layers",
+        ".map-legend",
+        ".leaflet-control",
+        ".leaflet-overlap-legend"
+      ];
+
+      ocultarSeletores.forEach((selector) => {
+        mapElement.querySelectorAll(selector).forEach((el) => {
+          elementosOcultados.push({ el, display: el.style.display });
+          el.style.display = "none";
+        });
+      });
+
+      mapElement.querySelectorAll(".leaflet-overlay-pane path").forEach((el) => {
+        estilosAlterados.push({
+          el,
+          fillOpacity: el.getAttribute("fill-opacity"),
+          strokeOpacity: el.getAttribute("stroke-opacity"),
+          strokeWidth: el.getAttribute("stroke-width"),
+        });
+
+        el.setAttribute("fill-opacity", somentePerimetro ? "0.025" : "0.07");
+        el.setAttribute("stroke-opacity", "0.98");
+        el.setAttribute("stroke-width", "3");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 2800));
+
+      const captura = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 3,
+        logging: false,
+        width: mapElement.clientWidth,
+        height: mapElement.clientHeight,
+      });
+
+      const canvasUtil = typeof recortarAreaUtilCanvas === "function" ? recortarAreaUtilCanvas(captura) : captura;
+
+      // V54: composição profissional, sem deformar e sem empurrar o imóvel para o topo.
+      const outW = 2000;
+      const outH = 1350;
+      const headerH = 74;
+      const footerH = 54;
+      const mapX = 18;
+      const mapY = headerH;
+      const mapW = outW - 36;
+      const mapH = outH - headerH - footerH;
+
+      const saida = document.createElement("canvas");
+      saida.width = outW;
+      saida.height = outH;
+      const ctx = saida.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, outW, outH);
+
+      // CONTAIN com fundo técnico: não corta o perímetro e mantém centralização.
+      const escala = Math.min(mapW / canvasUtil.width, mapH / canvasUtil.height);
+      const w = canvasUtil.width * escala;
+      const h = canvasUtil.height * escala;
+      const x = mapX + (mapW - w) / 2;
+      const y = mapY + (mapH - h) / 2;
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(mapX, mapY, mapW, mapH);
+      ctx.drawImage(canvasUtil, x, y, w, h);
+
+      ctx.strokeStyle = "#0f4c5c";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(mapX, mapY, mapW, mapH);
+
+      if (!somentePerimetro && typeof desenharLegendaRelatorioNoCanvas === "function") {
+        desenharLegendaExportacaoImagem(ctx, mapX + 18, mapY + 18, 10);
+      }
+
+      desenharElementosTecnicosImagem(
+        ctx,
+        outW,
+        outH,
+        somentePerimetro
+          ? `Imagem de satélite do perímetro analisado — ${nomeFonteSatelite(fonte)}`
+          : `Imagem de satélite com feições da análise — ${nomeFonteSatelite(fonte)}`
+      );
+
+      const mime = formato === "jpg" || formato === "jpeg" ? "image/jpeg" : "image/png";
+      const extensao = mime === "image/jpeg" ? "jpg" : "png";
+      const dataUrl = saida.toDataURL(mime, mime === "image/jpeg" ? 0.95 : 1.0);
+
+      const sufixo = somentePerimetro ? "somente_perimetro" : "com_feicoes";
+      baixarDataUrl(dataUrl, `imagem_satelite_${sufixo}_${fonte}_${new Date().toISOString().slice(0,10)}.${extensao}`);
+    } catch (error) {
+      console.error("Erro ao exportar imagem", error);
+      alert(`Erro ao exportar imagem: ${error.message}`);
+    } finally {
+      elementosOcultados.forEach(({ el, display }) => {
+        el.style.display = display;
+      });
+
+      estilosAlterados.forEach(({ el, fillOpacity, strokeOpacity, strokeWidth }) => {
+        if (fillOpacity === null) el.removeAttribute("fill-opacity"); else el.setAttribute("fill-opacity", fillOpacity);
+        if (strokeOpacity === null) el.removeAttribute("stroke-opacity"); else el.setAttribute("stroke-opacity", strokeOpacity);
+        if (strokeWidth === null) el.removeAttribute("stroke-width"); else el.setAttribute("stroke-width", strokeWidth);
+      });
+
+      try {
+        if (camadaExportacao && map.hasLayer(camadaExportacao)) {
+          map.removeLayer(camadaExportacao);
+        }
+      } catch {}
+
+      layersRemovidos.forEach((layer) => {
+        try {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } catch {}
+      });
+
+      try { destacarPerimetroAnalise(); } catch {}
+    }
+  }
+
+
+  function quadKeyBing(x, y, z) {
+    let quad = "";
+    for (let i = z; i > 0; i--) {
+      let digit = 0;
+      const mask = 1 << (i - 1);
+      if ((x & mask) !== 0) digit += 1;
+      if ((y & mask) !== 0) digit += 2;
+      quad += digit.toString();
+    }
+    return quad;
+  }
+
+  function criarCamadaSatelitePorFonte(fonte) {
+    if (fonte === "google") {
+      return L.tileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
+        attribution: "Imagem: Google Satellite",
+        maxZoom: 21,
+        crossOrigin: true,
+      });
+    }
+
+    if (fonte === "bing") {
+      const BingLayer = L.TileLayer.extend({
+        getTileUrl: function(coords) {
+          const q = quadKeyBing(coords.x, coords.y, coords.z);
+          const sub = ["0", "1", "2", "3"][Math.abs(coords.x + coords.y) % 4];
+          return `https://ecn.t${sub}.tiles.virtualearth.net/tiles/a${q}.jpeg?g=129&mkt=pt-BR&n=z`;
+        },
+        options: {
+          attribution: "Imagem: Bing Maps",
+          maxZoom: 21,
+          crossOrigin: true,
+        }
+      });
+      return new BingLayer();
+    }
+
+    return L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Imagem: Esri World Imagery",
+      maxZoom: 20,
+      crossOrigin: true,
+    });
+  }
+
+  function perguntarOpcoesImagemSatelite() {
+    const modoResposta = window.prompt(
+      "Exportar imagem com quais informações?\n\n1 = Com todas as feições da análise\n2 = Somente com o perímetro analisado\n\nDigite 1 ou 2:",
+      "1"
+    );
+
+    if (modoResposta === null) return null;
+
+    const somentePerimetro = String(modoResposta).trim() === "2";
+
+    const fonteResposta = window.prompt(
+      "Escolha a fonte da imagem de satélite:\n\n1 = Esri World Imagery (atual/padrão)\n2 = Google Satélite (experimental)\n3 = Bing Satélite (experimental)\n\nDigite 1, 2 ou 3:",
+      "1"
+    );
+
+    if (fonteResposta === null) return null;
+
+    const fonteTexto = String(fonteResposta).trim();
+    const fonte = fonteTexto === "2" ? "google" : fonteTexto === "3" ? "bing" : "esri";
+
+    return { somentePerimetro, fonte };
+  }
+
+  function nomeFonteSatelite(fonte) {
+    if (fonte === "google") return "Google Satellite";
+    if (fonte === "bing") return "Bing Maps Satellite";
+    return "Esri World Imagery";
+  }
+
+  function removerTileLayersBase(map) {
+    const removidas = [];
+    try {
+      map.eachLayer((layer) => {
+        if (layer instanceof L.TileLayer) {
+          try {
+            map.removeLayer(layer);
+            removidas.push(layer);
+          } catch {}
+        }
+      });
+    } catch {}
+    return removidas;
+  }
+
+  function calcularBboxPixelPerimetro(perimetro, canvas, mapElement) {
+    const map = mapRef.current;
+    if (!map || !perimetro || !canvas || !mapElement) return null;
+
+    try {
+      const coords = turf.coordAll(perimetro);
+      if (!coords?.length) return null;
+
+      const scaleX = canvas.width / mapElement.clientWidth;
+      const scaleY = canvas.height / mapElement.clientHeight;
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      coords.forEach(([lng, lat]) => {
+        const p = map.latLngToContainerPoint([lat, lng]);
+        const x = p.x * scaleX;
+        const y = p.y * scaleY;
+
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      });
+
+      if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+        return null;
+      }
+
+      return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+    } catch (error) {
+      console.warn("Não foi possível calcular bbox pixel do perímetro", error);
+      return null;
+    }
+  }
+
+  function recortarCanvasCentralizadoNoPerimetro(canvas, bbox, aspectoDestino, fatorMargem = 2.35) {
+    if (!canvas || !bbox || bbox.width <= 0 || bbox.height <= 0) return canvas;
+
+    try {
+      const centroX = (bbox.minX + bbox.maxX) / 2;
+      const centroY = (bbox.minY + bbox.maxY) / 2;
+
+      let cropW = bbox.width * fatorMargem;
+      let cropH = bbox.height * fatorMargem;
+
+      if (cropW / cropH < aspectoDestino) {
+        cropW = cropH * aspectoDestino;
+      } else {
+        cropH = cropW / aspectoDestino;
+      }
+
+      cropW = Math.max(cropW, canvas.width * 0.38);
+      cropH = Math.max(cropH, canvas.height * 0.38);
+
+      cropW = Math.min(cropW, canvas.width);
+      cropH = Math.min(cropH, canvas.height);
+
+      let x = centroX - cropW / 2;
+      let y = centroY - cropH / 2;
+
+      x = Math.max(0, Math.min(x, canvas.width - cropW));
+      y = Math.max(0, Math.min(y, canvas.height - cropH));
+
+      const out = document.createElement("canvas");
+      out.width = Math.round(cropW);
+      out.height = Math.round(cropH);
+      const ctx = out.getContext("2d");
+      ctx.drawImage(canvas, x, y, cropW, cropH, 0, 0, out.width, out.height);
+
+      return out;
+    } catch (error) {
+      console.warn("Falha ao recortar canvas centralizado no perímetro", error);
+      return canvas;
+    }
+  }
+  function detectarBboxPerimetroAmareloNoCanvas(canvas) {
+    try {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const { width, height } = canvas;
+      const data = ctx.getImageData(0, 0, width, height).data;
+
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      let count = 0;
+
+      // Detecta a linha amarela grossa do perímetro.
+      // Esta é a forma mais confiável porque usa a imagem final capturada,
+      // não depende mais de fitBounds/pan/latLngToContainerPoint.
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const i = (y * width + x) * 4;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const a = data[i + 3];
+
+          const amareloPerimetro = a > 120 && r > 210 && g > 185 && b < 80;
+
+          if (amareloPerimetro) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            count++;
+          }
+        }
+      }
+
+      if (count < 40 || maxX <= minX || maxY <= minY) {
+        return null;
+      }
+
+      return {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        width: maxX - minX,
+        height: maxY - minY,
+        count,
+      };
+    } catch (error) {
+      console.warn("Falha ao detectar perímetro amarelo", error);
+      return null;
+    }
+  }
+
+  function recortarCanvasPeloPerimetroAmarelo(canvas, aspectoDestino, somentePerimetro) {
+    const bbox = detectarBboxPerimetroAmareloNoCanvas(canvas);
+    if (!bbox) return canvas;
+
+    try {
+      const centroX = (bbox.minX + bbox.maxX) / 2;
+      const centroY = (bbox.minY + bbox.maxY) / 2;
+
+      // Margem cartográfica ao redor do perímetro.
+      let fator = somentePerimetro ? 2.35 : 2.85;
+
+      let cropW = bbox.width * fator;
+      let cropH = bbox.height * fator;
+
+      if (cropW / cropH < aspectoDestino) {
+        cropW = cropH * aspectoDestino;
+      } else {
+        cropH = cropW / aspectoDestino;
+      }
+
+      // Evita recorte excessivamente fechado.
+      cropW = Math.max(cropW, canvas.width * 0.42);
+      cropH = Math.max(cropH, canvas.height * 0.42);
+
+      cropW = Math.min(cropW, canvas.width);
+      cropH = Math.min(cropH, canvas.height);
+
+      let x = centroX - cropW / 2;
+      let y = centroY - cropH / 2;
+
+      x = Math.max(0, Math.min(x, canvas.width - cropW));
+      y = Math.max(0, Math.min(y, canvas.height - cropH));
+
+      const out = document.createElement("canvas");
+      out.width = Math.round(cropW);
+      out.height = Math.round(cropH);
+      const outCtx = out.getContext("2d");
+      outCtx.drawImage(canvas, x, y, cropW, cropH, 0, 0, out.width, out.height);
+
+      return out;
+    } catch (error) {
+      console.warn("Falha ao recortar canvas pelo perímetro amarelo", error);
+      return canvas;
+    }
+  }
+
+
+  function desenharLegendaExportacaoImagem(ctx, x = 30, y = 90, maxItens = 10) {
+    const itens = (analiseSobreposicao?.resultados || []).slice(0, maxItens);
+    if (!itens.length) return;
+
+    const boxW = 700;
+    const lineH = 25;
+    const boxH = 52 + itens.length * lineH;
+
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.strokeStyle = "#0f4c5c";
+    ctx.lineWidth = 2;
+
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, boxW, boxH, 12);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(x, y, boxW, boxH);
+      ctx.strokeRect(x, y, boxW, boxH);
+    }
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Legenda das feições da análise", x + 16, y + 32);
+
+    ctx.font = "16px Arial";
+    itens.forEach((r, idx) => {
+      const yy = y + 64 + idx * lineH;
+      ctx.fillStyle = r.cor || corSobreposicao(idx);
+      ctx.fillRect(x + 16, yy - 14, 17, 17);
+      ctx.strokeStyle = "#1f2937";
+      ctx.strokeRect(x + 16, yy - 14, 17, 17);
+
+      const nome = r.origem === "INTERMAT"
+        ? nomeIntermatParaRelatorio(r)
+        : (r.nomeFazenda || r.nome || r.codigo || "-");
+      const area = Number(r.areaSobrepostaHa || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+
+      ctx.fillStyle = "#111827";
+      ctx.fillText(`${idx + 1}. ${r.origem || ""} — ${String(nome).slice(0, 48)} (${area} ha)`, x + 43, yy);
+    });
+  }function enquadrarPerimetroComFolgaSuperior(perimetro, modo = "relatorio") {
+    const map = mapRef.current;
+    if (!map || !perimetro) return;
+
+    try {
+      const bounds = L.geoJSON(perimetro).getBounds();
+      if (!bounds || !bounds.isValid()) return;
+
+      // Margem superior maior = imóvel desce visualmente na prancha.
+      // Isso evita o perímetro colado no topo em PNG/JPG e relatório.
+      const top = modo === "imagem" ? 310 : 260;
+      const bottom = modo === "imagem" ? 90 : 120;
+      const lateral = modo === "imagem" ? 180 : 160;
+
+      map.fitBounds(bounds, {
+        paddingTopLeft: [lateral, top],
+        paddingBottomRight: [lateral, bottom],
+        animate: false,
+      });
+    } catch (error) {
+      console.warn("Falha no enquadramento com folga superior", error);
+    }
+  }async function exportarImagemSateliteRecortada(formato = "png") {
+    const opcoes = perguntarOpcoesImagemSatelite();
+    if (!opcoes) return;
+
+    const { somentePerimetro, fonte } = opcoes;
+
+    const map = mapRef.current;
+    const mapElement = document.getElementById("map") || document.querySelector(".leaflet-container");
+
+    if (!map || !mapElement) {
+      alert("Mapa não encontrado para exportação.");
+      return;
+    }
+
+    const perimetro = obterFeaturePerimetro(geojsonAtual);
+    if (!perimetro) {
+      alert("Carregue um perímetro antes de exportar a imagem.");
+      return;
+    }
+
+    const elementosOcultados = [];
+    const estilosAlterados = [];
+    const layersRemovidos = [];
+    let camadaExportacao = null;
+
+    try {
+      destacarPerimetroAnalise();
+      map.invalidateSize(true);
+
+      layersRemovidos.push(...removerTileLayersBase(map));
+
+      camadaExportacao = criarCamadaSatelitePorFonte(fonte);
+      camadaExportacao.addTo(map);
+      try { camadaExportacao.bringToBack(); } catch {}
+
+      if (somentePerimetro) {
+        [overlapLayerRef.current, autoCarLayerRef.current, autoSigefLayerRef.current, autoIntermatLayerRef.current]
+          .filter(Boolean)
+          .forEach((layer) => {
+            try {
+              if (map.hasLayer(layer)) {
+                map.removeLayer(layer);
+                layersRemovidos.push(layer);
+              }
+            } catch {}
+          });
+      }
+
+      enquadrarPerimetroComFolgaSuperior(perimetro, "imagem");
+
+      const ocultarSeletores = [
+        ".leaflet-control-zoom",
+        ".leaflet-draw",
+        ".leaflet-control-attribution",
+        ".leaflet-control-layers",
+        ".map-legend",
+        ".leaflet-control",
+        ".leaflet-overlap-legend"
+      ];
+
+      ocultarSeletores.forEach((selector) => {
+        mapElement.querySelectorAll(selector).forEach((el) => {
+          elementosOcultados.push({ el, display: el.style.display });
+          el.style.display = "none";
+        });
+      });
+
+      mapElement.querySelectorAll(".leaflet-overlay-pane path").forEach((el) => {
+        estilosAlterados.push({
+          el,
+          fillOpacity: el.getAttribute("fill-opacity"),
+          strokeOpacity: el.getAttribute("stroke-opacity"),
+          strokeWidth: el.getAttribute("stroke-width"),
+        });
+
+        el.setAttribute("fill-opacity", somentePerimetro ? "0.025" : "0.07");
+        el.setAttribute("stroke-opacity", "0.98");
+        el.setAttribute("stroke-width", "3");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const captura = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 3,
+        logging: false,
+        width: mapElement.clientWidth,
+        height: mapElement.clientHeight,
+      });
+
+      const outW = 2000;
+      const outH = 1350;
+      const headerH = 74;
+      const footerH = 54;
+      const legendH = somentePerimetro ? 0 : 170;
+      const gap = somentePerimetro ? 0 : 12;
+
+      const mapX = 18;
+      const mapY = headerH;
+      const mapW = outW - 36;
+      const mapH = outH - headerH - footerH - legendH - gap;
+
+      const saida = document.createElement("canvas");
+      saida.width = outW;
+      saida.height = outH;
+      const ctx = saida.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, outW, outH);
+
+      // COVER: preenche o quadro todo sem faixas brancas laterais.
+      // Como o mapa foi enquadrado com folga superior antes da captura, o imóvel não fica colado no topo.
+      const escala = Math.max(mapW / captura.width, mapH / captura.height);
+      const w = captura.width * escala;
+      const h = captura.height * escala;
+      const x = mapX + (mapW - w) / 2;
+      const y = mapY + (mapH - h) / 2;
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(mapX, mapY, mapW, mapH);
+      ctx.drawImage(captura, x, y, w, h);
+
+      ctx.strokeStyle = "#0f4c5c";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(mapX, mapY, mapW, mapH);
+
+      if (!somentePerimetro) {
+        desenharLegendaRelatorioForaDoMapa(ctx, mapX, mapY + mapH + gap, mapW, legendH, 10);
+      }
+
+      desenharElementosTecnicosImagem(
+        ctx,
+        outW,
+        outH,
+        somentePerimetro
+          ? `Imagem de satélite do perímetro analisado — ${nomeFonteSatelite(fonte)}`
+          : `Imagem de satélite com feições da análise — ${nomeFonteSatelite(fonte)}`
+      );
+
+      const mime = formato === "jpg" || formato === "jpeg" ? "image/jpeg" : "image/png";
+      const extensao = mime === "image/jpeg" ? "jpg" : "png";
+      const dataUrl = saida.toDataURL(mime, mime === "image/jpeg" ? 0.95 : 1.0);
+
+      const sufixo = somentePerimetro ? "somente_perimetro" : "com_feicoes";
+      baixarDataUrl(dataUrl, `imagem_satelite_${sufixo}_${fonte}_${new Date().toISOString().slice(0,10)}.${extensao}`);
+    } catch (error) {
+      console.error("Erro ao exportar imagem", error);
+      alert(`Erro ao exportar imagem: ${error.message}`);
+    } finally {
+      elementosOcultados.forEach(({ el, display }) => {
+        el.style.display = display;
+      });
+
+      estilosAlterados.forEach(({ el, fillOpacity, strokeOpacity, strokeWidth }) => {
+        if (fillOpacity === null) el.removeAttribute("fill-opacity"); else el.setAttribute("fill-opacity", fillOpacity);
+        if (strokeOpacity === null) el.removeAttribute("stroke-opacity"); else el.setAttribute("stroke-opacity", strokeOpacity);
+        if (strokeWidth === null) el.removeAttribute("stroke-width"); else el.setAttribute("stroke-width", strokeWidth);
+      });
+
+      try {
+        if (camadaExportacao && map.hasLayer(camadaExportacao)) {
+          map.removeLayer(camadaExportacao);
+        }
+      } catch {}
+
+      layersRemovidos.forEach((layer) => {
+        try {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } catch {}
+      });
+
+      try { destacarPerimetroAnalise(); } catch {}
+    }
+  }
+
+function detectarBboxPerimetroAmareloRelatorio(canvas) {
+    try {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const { width, height } = canvas;
+      const data = ctx.getImageData(0, 0, width, height).data;
+
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      let count = 0;
+
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const i = (y * width + x) * 4;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const a = data[i + 3];
+
+          // Perímetro analisado: amarelo forte.
+          const amarelo = a > 120 && r > 205 && g > 175 && b < 95;
+
+          if (amarelo) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            count++;
+          }
+        }
+      }
+
+      if (count < 40 || maxX <= minX || maxY <= minY) return null;
+
+      return {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        width: maxX - minX,
+        height: maxY - minY,
+        count,
+      };
+    } catch (error) {
+      console.warn("Não foi possível detectar perímetro amarelo do relatório", error);
+      return null;
+    }
+  }
+
+  function recortarCanvasSeguroParaRelatorioWord(canvas, aspectoDestino) {
+    const bbox = detectarBboxPerimetroAmareloRelatorio(canvas);
+    if (!canvas || !bbox) return canvas;
+
+    try {
+      const centroX = (bbox.minX + bbox.maxX) / 2;
+      const centroY = (bbox.minY + bbox.maxY) / 2;
+
+      // Regra do relatório:
+      // não pode cortar perímetro. Por isso a margem é ampla e controlada.
+      const margemX = Math.max(bbox.width * 0.90, canvas.width * 0.12);
+      const margemY = Math.max(bbox.height * 1.15, canvas.height * 0.16);
+
+      let cropW = bbox.width + margemX * 2;
+      let cropH = bbox.height + margemY * 2;
+
+      if (cropW / cropH < aspectoDestino) {
+        cropW = cropH * aspectoDestino;
+      } else {
+        cropH = cropW / aspectoDestino;
+      }
+
+      // Não permitir recorte pequeno demais no Word.
+      cropW = Math.max(cropW, canvas.width * 0.72);
+      cropH = Math.max(cropH, canvas.height * 0.72);
+
+      cropW = Math.min(cropW, canvas.width);
+      cropH = Math.min(cropH, canvas.height);
+
+      let x = centroX - cropW / 2;
+      let y = centroY - cropH / 2;
+
+      // Se o perímetro está perto da borda, desloca o recorte para garantir folga.
+      const folga = Math.max(24, Math.min(canvas.width, canvas.height) * 0.025);
+
+      if (bbox.minX - x < folga) x = bbox.minX - folga;
+      if (bbox.maxX > x + cropW - folga) x = bbox.maxX - cropW + folga;
+      if (bbox.minY - y < folga) y = bbox.minY - folga;
+      if (bbox.maxY > y + cropH - folga) y = bbox.maxY - cropH + folga;
+
+      x = Math.max(0, Math.min(x, canvas.width - cropW));
+      y = Math.max(0, Math.min(y, canvas.height - cropH));
+
+      const out = document.createElement("canvas");
+      out.width = Math.round(cropW);
+      out.height = Math.round(cropH);
+      const outCtx = out.getContext("2d");
+      outCtx.drawImage(canvas, x, y, cropW, cropH, 0, 0, out.width, out.height);
+
+      return out;
+    } catch (error) {
+      console.warn("Falha ao recortar mapa seguro para relatório", error);
+      return canvas;
+    }
+  }function desenharLegendaRelatorioForaDoMapa(ctx, x, y, w, h, maxItens = 10) {
+    const itens = (analiseSobreposicao?.resultados || []).slice(0, maxItens);
+    if (!itens.length) return;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.strokeStyle = "#0f4c5c";
+    ctx.lineWidth = 2;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+
+    ctx.fillStyle = "#0f4c5c";
+    ctx.font = "bold 21px Arial";
+    ctx.fillText("Legenda das feições sobrepostas", x + 16, y + 30);
+
+    const colW = (w - 34) / 2;
+    const lineH = 23;
+
+    ctx.font = "15px Arial";
+    itens.forEach((r, idx) => {
+      const col = idx < Math.ceil(itens.length / 2) ? 0 : 1;
+      const row = col === 0 ? idx : idx - Math.ceil(itens.length / 2);
+      const xx = x + 16 + col * colW;
+      const yy = y + 58 + row * lineH;
+
+      ctx.fillStyle = r.cor || corSobreposicao(idx);
+      ctx.fillRect(xx, yy - 14, 16, 16);
+      ctx.strokeStyle = "#1f2937";
+      ctx.strokeRect(xx, yy - 14, 16, 16);
+
+      const nome = r.origem === "INTERMAT"
+        ? nomeIntermatParaRelatorio(r)
+        : (r.nomeFazenda || r.nome || r.codigo || "-");
+      const area = Number(r.areaSobrepostaHa || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+
+      ctx.fillStyle = "#111827";
+      ctx.fillText(`${idx + 1}. ${r.origem || ""} — ${String(nome).slice(0, 34)} (${area} ha)`, xx + 24, yy);
+    });
+  }async function capturarMapaComoImagem() {
+    const mapElement = document.getElementById("map") || document.querySelector(".leaflet-container");
+
+    if (!mapElement) {
+      return typeof gerarMapaFallbackRelatorio === "function" ? gerarMapaFallbackRelatorio() : null;
+    }
+
+    const elementosOcultados = [];
+    const estilosAlterados = [];
+
+    try {
+      const map = mapRef.current;
+      const perimetro = obterFeaturePerimetro(geojsonAtual);
+
+      if (map) {
+        map.invalidateSize(true);
+        if (perimetro) enquadrarPerimetroComFolgaSuperior(perimetro, "relatorio");
+        try { destacarPerimetroAnalise(); } catch {}
+      }
+
+      const ocultarSeletores = [
+        ".leaflet-control-zoom",
+        ".leaflet-draw",
+        ".leaflet-control-attribution",
+        ".leaflet-control-layers",
+        ".map-legend",
+        ".leaflet-control",
+        ".leaflet-overlap-legend"
+      ];
+
+      ocultarSeletores.forEach((selector) => {
+        mapElement.querySelectorAll(selector).forEach((el) => {
+          elementosOcultados.push({ el, display: el.style.display });
+          el.style.display = "none";
+        });
+      });
+
+      mapElement.querySelectorAll(".leaflet-overlay-pane path").forEach((el) => {
+        estilosAlterados.push({
+          el,
+          fillOpacity: el.getAttribute("fill-opacity"),
+          strokeOpacity: el.getAttribute("stroke-opacity"),
+          strokeWidth: el.getAttribute("stroke-width"),
+        });
+
+        el.setAttribute("fill-opacity", "0.08");
+        el.setAttribute("stroke-opacity", "0.98");
+        el.setAttribute("stroke-width", "3");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+
+      const captura = await html2canvas(mapElement, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        scale: 3,
+        logging: false,
+        width: mapElement.clientWidth,
+        height: mapElement.clientHeight,
+      });
+
+      // Página técnica do relatório: mapa grande + legenda em faixa externa.
+      const larguraFinal = 2000;
+      const alturaFinal = 1125;
+      const headerH = 70;
+      const footerH = 42;
+      const legendH = 170;
+      const gap = 12;
+
+      const mapX = 18;
+      const mapY = headerH;
+      const mapW = larguraFinal - 36;
+      const mapH = alturaFinal - headerH - footerH - legendH - gap;
+
+      const saida = document.createElement("canvas");
+      saida.width = larguraFinal;
+      saida.height = alturaFinal;
+      const ctx = saida.getContext("2d");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, larguraFinal, alturaFinal);
+
+      // Não recorta agressivamente no relatório. Usa a captura inteira, centralizada no quadro.
+      const escala = Math.min(mapW / captura.width, mapH / captura.height);
+      const w = captura.width * escala;
+      const h = captura.height * escala;
+      const x = mapX + (mapW - w) / 2;
+      const y = mapY + (mapH - h) / 2;
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(mapX, mapY, mapW, mapH);
+      ctx.drawImage(captura, x, y, w, h);
+
+      ctx.strokeStyle = "#0f4c5c";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(mapX, mapY, mapW, mapH);
+
+      // Legenda fora do mapa: não cobre perímetro nem feições.
+      desenharLegendaRelatorioForaDoMapa(ctx, mapX, mapY + mapH + gap, mapW, legendH, 10);
+
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fillRect(0, 0, larguraFinal, headerH);
+      ctx.fillStyle = "#0f4c5c";
+      ctx.font = "bold 28px Arial";
+      ctx.fillText("Longitude Geo Intelligence — Mapa técnico da análise de sobreposição", 30, 38);
+      ctx.fillStyle = "#334155";
+      ctx.font = "18px Arial";
+      ctx.fillText(`Data: ${hojeBR()} • Perímetro analisado destacado em amarelo`, 30, 62);
+
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fillRect(0, alturaFinal - footerH, larguraFinal, footerH);
+      ctx.fillStyle = "#1f2937";
+      ctx.font = "17px Arial";
+      ctx.fillText("Fonte: mapa visível no sistema • Uso técnico preliminar • Conferir em ambiente SIG para peças oficiais", 30, alturaFinal - 15);
+
+      const dataUrl = saida.toDataURL("image/png", 1.0);
+      setMapaRelatorioDataUrl(dataUrl);
+      return dataUrl;
+    } catch (error) {
+      console.error("Erro ao capturar mapa para relatório", error);
+      if (typeof gerarMapaFallbackRelatorio === "function") return gerarMapaFallbackRelatorio();
+      return null;
+    } finally {
+      elementosOcultados.forEach(({ el, display }) => {
+        el.style.display = display;
+      });
+
+      estilosAlterados.forEach(({ el, fillOpacity, strokeOpacity, strokeWidth }) => {
+        if (fillOpacity === null) el.removeAttribute("fill-opacity"); else el.setAttribute("fill-opacity", fillOpacity);
+        if (strokeOpacity === null) el.removeAttribute("stroke-opacity"); else el.setAttribute("stroke-opacity", strokeOpacity);
+        if (strokeWidth === null) el.removeAttribute("stroke-width"); else el.setAttribute("stroke-width", strokeWidth);
+      });
     }
   }
 
@@ -1288,7 +3729,7 @@ function normalizarComparacao(valor) {
         celula(r.origem, { width: 9 }),
         celula(r.codigo, { width: 16 }),
         celula(r.sncr, { width: 13 }),
-        celula(r.nome, { width: 18 }),
+        celula(identificacaoRelatorio(r), { width: 18 }),
         celula(r.matricula, { width: 8 }),
         celula(r.municipio, { width: 9 }),
         celula(r.status, { width: 7 }),
@@ -1306,7 +3747,7 @@ function normalizarComparacao(valor) {
             celula("Cor", { header: true, width: 10, align: AlignmentType.CENTER }),
             celula("Origem", { header: true, width: 18 }),
             celula("Código", { header: true, width: 34 }),
-            celula("Nome/Identificação", { header: true, width: 38 }),
+            celula("Identificação/Título/Fazenda", { header: true, width: 38 }),
           ],
         }),
         ...analiseSobreposicao.resultados.map((r) => new TableRow({
@@ -1314,7 +3755,7 @@ function normalizarComparacao(valor) {
             celula("", { width: 10, fill: corDocx(r.cor), align: AlignmentType.CENTER }),
             celula(r.origem, { width: 18, size: 16 }),
             celula(r.codigo, { width: 34, size: 16 }),
-            celula(r.nome, { width: 38, size: 16 }),
+            celula(identificacaoRelatorio(r), { width: 38, size: 16 }),
           ],
         })),
       ],
@@ -1331,7 +3772,7 @@ function normalizarComparacao(valor) {
             celula("Origem", { header: true, width: 9 }),
             celula("Código", { header: true, width: 16 }),
             celula("SNCR/Cód. Imóvel", { header: true, width: 13 }),
-            celula("Nome", { header: true, width: 18 }),
+            celula("Identificação/Título/Fazenda", { header: true, width: 18 }),
             celula("Matrícula", { header: true, width: 8 }),
             celula("Município", { header: true, width: 9 }),
             celula("Status", { header: true, width: 7 }),
@@ -1357,7 +3798,8 @@ function normalizarComparacao(valor) {
           properties: {
             type: SectionType.NEXT_PAGE,
             page: {
-              margin: { top: 720, right: 720, bottom: 720, left: 720 },
+              size: { orientation: PageOrientation.LANDSCAPE },
+              margin: { top: 220, right: 220, bottom: 220, left: 220 },
             },
           },
           children: [
@@ -1382,10 +3824,10 @@ function normalizarComparacao(valor) {
               new Paragraph({
                 alignment: AlignmentType.CENTER,
                 spacing: { before: 80, after: 80 },
-                children: [new ImageRun({ data: mapaRelatorioBytes, transformation: { width: 610, height: 410 } })],
+                children: [new ImageRun({ data: mapaRelatorioBytes, transformation: { width: 1008, height: 567 } })],
               }),
-              p("Figura 01 – Visualização cartográfica das feições sobrepostas ao perímetro analisado. As cores correspondem à legenda técnica apresentada na seção seguinte.", { size: 16, color: "475569", alignment: AlignmentType.CENTER }),
-            ] : [p("Mapa não foi capturado automaticamente. Gere o relatório a partir da tela de mapa após executar a análise de sobreposição.", { size: 16, color: "B91C1C" })]),
+              p("Figura 01 – Mapa técnico ampliado da análise de sobreposição. O perímetro analisado é confrontado com as feições CAR, SIGEF e INTERMAT; as cores da legenda identificam cada feição interceptada e a tabela seguinte detalha área e origem.", { size: 17, color: "475569", alignment: AlignmentType.CENTER }),
+            ] : [p("Mapa técnico não disponível.", { size: 16, color: "B91C1C" })]),
           ],
         },
         {
@@ -1426,8 +3868,7 @@ function normalizarComparacao(valor) {
 
     const blob = await Packer.toBlob(doc);
     salvarBlob("Relatorio_Sobreposicao_Longitude.docx", blob);
-  }
-  function exportarConsultaGeoJSON() {
+  }  function exportarConsultaGeoJSON() {
     if (!consultaGeojson?.features?.length) {
       alert("Não existe parcela consultada para exportar.");
       return;
@@ -1469,35 +3910,7 @@ function normalizarComparacao(valor) {
       console.error(error);
       alert("Erro ao exportar Shapefile. Tente exportar em GeoJSON ou KML.");
     }
-  }
-
-  async function capturarMapaComoImagem() {
-    try {
-      const mapElement = document.getElementById("map");
-      if (!mapElement) return null;
-
-      if (mapRef.current) {
-        mapRef.current.invalidateSize();
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
-      const canvas = await html2canvas(mapElement, {
-        useCORS: true,
-        allowTaint: false,
-        backgroundColor: "#ffffff",
-        scale: 1.4,
-        logging: false,
-      });
-
-      return canvas.toDataURL("image/png");
-    } catch (error) {
-      console.error("Erro ao capturar mapa para relatório", error);
-      return null;
-    }
-  }
-
-  function desenharPreviewSigef() {
+  }  function desenharPreviewSigef() {
     const map = mapRef.current;
     if (!map || !sigefLocalGeojson?.features?.length || !geojsonAtual) {
       alert("Para pré-visualizar SIGEF, importe a base SIGEF local e carregue/desenhe um perímetro primeiro.");
@@ -1530,7 +3943,7 @@ function normalizarComparacao(valor) {
         color: "#16a34a",
         weight: 2,
         fillColor: "#16a34a",
-        fillOpacity: 0.16,
+        fillOpacity: 0.10,
       },
       onEachFeature: (feature, camada) => {
         const p = feature.properties || {};
@@ -1565,7 +3978,7 @@ function normalizarComparacao(valor) {
         color: "#2563eb",
         weight: 3,
         fillColor: "#2563eb",
-        fillOpacity: 0.16,
+        fillOpacity: 0.10,
       },
       onEachFeature: (feature, camada) => {
         const p = feature.properties || {};
@@ -1576,38 +3989,7 @@ function normalizarComparacao(valor) {
 
     previewCarLayerRef.current = layer;
     setMostrarPreviewCar(true);
-  }
-
-
-  async function capturarMapaComoImagem() {
-    try {
-      const mapElement = document.getElementById("map");
-      if (!mapElement) return null;
-
-      if (mapRef.current) {
-        mapRef.current.invalidateSize();
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const canvas = await html2canvas(mapElement, {
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: "#ffffff",
-        scale: 1.35,
-        logging: false,
-      });
-
-      const dataUrl = canvas.toDataURL("image/png");
-      setMapaRelatorioDataUrl(dataUrl);
-      return dataUrl;
-    } catch (error) {
-      console.error("Erro ao capturar mapa para relatório", error);
-      return null;
-    }
-  }
-
-  function calcularSobreposicaoDetalhada(perimetroBase, feicoesConsulta, origemPadrao = "FEIÇÃO CONSULTADA") {
+  }  function calcularSobreposicaoDetalhada(perimetroBase, feicoesConsulta, origemPadrao = "FEIÇÃO CONSULTADA") {
     try {
       if (!perimetroBase?.features?.length || !feicoesConsulta?.features?.length) return null;
 
@@ -1731,13 +4113,13 @@ function normalizarComparacao(valor) {
         color: feature.properties.__cor || "#ef4444",
         weight: 3,
         fillColor: feature.properties.__cor || "#ef4444",
-        fillOpacity: 0.38,
+        fillOpacity: 0.18,
       }),
       onEachFeature: (feature, camada) => {
         const p = feature.properties || {};
         camada.bindPopup(`
           <strong>${p.__origem || "Sobreposição"}</strong><br/>
-          Código: ${p.__codigo || "-"}<br/>
+          ${origem === "CAR" ? "Número CAR" : "Código"}: ${p.__codigo || "-"}<br/>
           Nome: ${p.__nome || "-"}<br/>
           Área sobreposta: ${p.__areaSobrepostaHa || 0} ha
         `);
@@ -1919,7 +4301,8 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
   function montarResultadoAutomaticoParaRelatorio() {
     const features = [
       ...(autoCarGeojson?.features || []),
-      ...(autoSigefGeojson?.features || [])
+      ...(autoSigefGeojson?.features || []),
+      ...(autoIntermatGeojson?.features || [])
     ].filter((f) => f?.properties?.__sobrepoe);
 
     if (!geojsonAtual?.features?.length || features.length === 0) return null;
@@ -1943,11 +4326,14 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
         const p = feature.properties || {};
         const cor = p.__cor || corSobreposicao(i);
 
+        const dadosIntermat = p.__origem === "INTERMAT" ? resolverDadosIntermat(p) : null;
         inter.properties = {
           ...p,
           __origem: p.__origem || "ANÁLISE AUTOMÁTICA",
-          __codigo: p.__codigo || "-",
-          __nome: p.__nome || "-",
+          __codigo: p.__codigo || dadosIntermat?.codigo || "-",
+          __nome: p.__origem === "INTERMAT" ? (dadosIntermat?.tituloPrimitivo || nomeTituloIntermat(p)) : (p.__nome || "-"),
+          __tituloPrimitivo: p.__origem === "INTERMAT" ? (dadosIntermat?.tituloPrimitivo || nomeTituloIntermat(p)) : (p.__tituloPrimitivo || p.__nome || "-"),
+          __nomeFazenda: p.__origem === "INTERMAT" ? (dadosIntermat?.nomeFazenda || nomeFazendaIntermat(p)) : (p.__nomeFazenda || "-"),
           __sncr: p.__sncr || "-",
           __matricula: p.__matricula || "-",
           __municipio: p.__municipio || "-",
@@ -2033,6 +4419,35 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     }
 
     return null;
+  }function alternarBaseAnalise(base) {
+    setBasesAnaliseAtivas((prev) => {
+      const novo = { ...prev, [base]: !prev[base] };
+      const map = mapRef.current;
+
+      setTimeout(() => {
+        try {
+          const controlar = (layerRef, ativo) => {
+            const layer = layerRef?.current;
+            if (!map || !layer) return;
+            if (ativo) {
+              if (!map.hasLayer(layer)) layer.addTo(map);
+            } else {
+              if (map.hasLayer(layer)) map.removeLayer(layer);
+            }
+          };
+
+          if (base === "sigef") controlar(autoSigefLayerRef, novo.sigef);
+          if (base === "car") controlar(autoCarLayerRef, novo.car);
+          if (base === "intermat") controlar(autoIntermatLayerRef, novo.intermat);
+
+          try { destacarPerimetroAnalise(); } catch {}
+        } catch (error) {
+          console.warn("Falha ao alternar camada de análise", error);
+        }
+      }, 0);
+
+      return novo;
+    });
   }
 
   function limparCamadasAutomaticas() {
@@ -2048,6 +4463,11 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
       map.removeLayer(autoSigefLayerRef.current);
       autoSigefLayerRef.current = null;
     }
+
+    if (autoIntermatLayerRef.current) {
+      map.removeLayer(autoIntermatLayerRef.current);
+      autoIntermatLayerRef.current = null;
+    }
   }
 
   function desenharCamadaAutomatica(geojson, origem) {
@@ -2055,30 +4475,32 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     if (!map || !geojson?.features?.length) return;
 
     const isCar = origem === "CAR";
-    const ref = isCar ? autoCarLayerRef : autoSigefLayerRef;
+    const isIntermat = origem === "INTERMAT";
+    const ref = isCar ? autoCarLayerRef : (isIntermat ? autoIntermatLayerRef : autoSigefLayerRef);
 
     if (ref.current) {
       map.removeLayer(ref.current);
       ref.current = null;
     }
 
-    const cor = isCar ? "#2563eb" : "#16a34a";
+    const cor = isCar ? "#2563eb" : (isIntermat ? "#f59e0b" : "#16a34a");
 
     const layer = L.geoJSON(geojson, {
       style: (feature) => ({
         color: feature.properties?.__sobrepoe ? "#ef4444" : cor,
         weight: feature.properties?.__sobrepoe ? 4 : 2,
         fillColor: feature.properties?.__sobrepoe ? "#ef4444" : cor,
-        fillOpacity: feature.properties?.__sobrepoe ? 0.38 : 0.16,
+        fillOpacity: feature.properties?.__sobrepoe ? 0.16 : 0.05,
       }),
       onEachFeature: (feature, camada) => {
         const p = feature.properties || {};
         camada.bindPopup(`
           <strong>${origem}</strong><br/>
-          ${p.__nome || ""}<br/>
+          ${origem === "INTERMAT" ? `<strong>Título primitivo:</strong> ${nomeTituloIntermat(p)}<br/><strong>Fazenda/denominação:</strong> ${nomeFazendaIntermat(p)}<br/><strong>Requerente:</strong> ${p.__requerente || "-"}<br/>` : `${p.__nome || ""}<br/>`}
           Código: ${p.__codigo || "-"}<br/>
           Sobrepõe: ${p.__sobrepoe ? "SIM" : "NÃO"}<br/>
-          Área sobreposta: ${p.__areaSobrepostaHa || 0} ha
+          Área sobreposta: ${p.__areaSobrepostaHa || 0} ha<br/>
+          Percentual no perímetro: ${p.__percentualBase || 0}%
         `);
       },
     }).addTo(map);
@@ -2086,100 +4508,167 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     ref.current = layer;
   }
 
+  async function descobrirCamadasCarWfs() {
+    try {
+      const params = new URLSearchParams({
+        service: "WFS",
+        version: "1.1.0",
+        request: "GetCapabilities",
+      });
+
+      const resposta = await fetch(`${SERVICOS_OFICIAIS.carWfs}?${params.toString()}`);
+      const texto = await resposta.text();
+
+      const nomes = [...texto.matchAll(/<Name>([^<]+)<\/Name>/g)]
+        .map((m) => m[1])
+        .filter((nome) => /imovel|imoveis|area/i.test(nome))
+        .filter((nome) => !/app|reserva|vegetacao|hidrografia|servidao|nascente/i.test(nome));
+
+      const unicos = [...new Set(nomes)];
+      setCarCapabilitiesInfo(`Camadas CAR detectadas: ${unicos.slice(0, 12).join(", ") || "nenhuma camada compatível"}`);
+      return unicos;
+    } catch (error) {
+      setCarCapabilitiesInfo(`Erro ao ler GetCapabilities do CAR: ${error.message}`);
+      return [];
+    }
+  }
+
   async function buscarCarOnlinePorPerimetro(perimetro) {
     const uf = detectarUfPorCentroide(perimetro);
     const bbox = bboxComFolga(perimetro, 0.10);
+
+    const camadasDetectadas = await descobrirCamadasCarWfs();
+
     const typeNames = [
-      `sicar:sicar_imoveis_${uf}`,
-      `sicar:imoveis_${uf}`,
+      ...camadasDetectadas,
+      `sicar:area_imovel`,
+      `sicar:AREA_IMOVEL`,
+      `sicar:imoveis`,
+      `sicar:IMOVEIS`,
       `sicar:area_imovel_${uf}`,
-      `sicar:car_imoveis_${uf}`
-    ];
+      `sicar:imoveis_${uf}`,
+      `sicar:sicar_imoveis_${uf}`
+    ].filter(Boolean);
 
-    let ultimoErro = "";
+    const unicos = [...new Set(typeNames)];
+    const erros = [];
 
-    for (const typeName of typeNames) {
-      try {
-        const params = new URLSearchParams({
-          service: "WFS",
+    for (const typeName of unicos) {
+      const tentativas = [
+        {
           version: "1.1.0",
-          request: "GetFeature",
-          typeName,
-          outputFormat: "application/json",
-          srsName: "EPSG:4326",
           bbox: `${bbox[0]},${bbox[1]},${bbox[2]},${bbox[3]},EPSG:4326`,
-          maxFeatures: "250",
-        });
-
-        const resposta = await fetch(`${SERVICOS_OFICIAIS.carWfs}?${params.toString()}`);
-        if (!resposta.ok) {
-          ultimoErro = `${typeName}: HTTP ${resposta.status}`;
-          continue;
+          srsName: "EPSG:4326",
+        },
+        {
+          version: "1.0.0",
+          bbox: `${bbox[0]},${bbox[1]},${bbox[2]},${bbox[3]}`,
+          srsName: "EPSG:4326",
         }
+      ];
 
-        const geojson = await resposta.json();
-        if (geojson?.features?.length) {
-          return { geojson, camada: typeName };
+      for (const tentativa of tentativas) {
+        try {
+          const params = new URLSearchParams({
+            service: "WFS",
+            version: tentativa.version,
+            request: "GetFeature",
+            typeName,
+            outputFormat: "application/json",
+            srsName: tentativa.srsName,
+            bbox: tentativa.bbox,
+            maxFeatures: "250",
+          });
+
+          const resposta = await fetch(`${SERVICOS_OFICIAIS.carWfs}?${params.toString()}`);
+          const texto = await resposta.text();
+
+          if (!resposta.ok) {
+            erros.push(`${typeName}: HTTP ${resposta.status}`);
+            continue;
+          }
+
+          let geojson = null;
+          try {
+            geojson = JSON.parse(texto);
+          } catch {
+            erros.push(`${typeName}: resposta não JSON (${texto.slice(0, 80)})`);
+            continue;
+          }
+
+          if (geojson?.features?.length) {
+            setCarCapabilitiesInfo(`CAR OK: camada ${typeName}, ${geojson.features.length} feição(ões) no entorno.`);
+            return { geojson, camada: typeName };
+          }
+
+          erros.push(`${typeName}: 0 feições`);
+        } catch (error) {
+          erros.push(`${typeName}: ${error.message}`);
         }
-
-        ultimoErro = `${typeName}: 0 feições`;
-      } catch (error) {
-        ultimoErro = `${typeName}: ${error.message}`;
       }
     }
 
-    console.warn("CAR automático não retornou feições:", ultimoErro);
-    return { geojson: { type: "FeatureCollection", features: [] }, camada: "", erro: ultimoErro };
+    const resumoErro = erros.slice(-8).join(" | ");
+    setCarCapabilitiesInfo(`CAR não retornou feições no entorno. Últimos testes: ${resumoErro}`);
+    console.warn("CAR automático não retornou feições:", resumoErro);
+    return { geojson: { type: "FeatureCollection", features: [] }, camada: "", erro: resumoErro };
   }
+
 
   function cruzarFeicoesComPerimetro(perimetro, feicoes, origem) {
     const resultado = [];
     let idx = 0;
+    const perimetroFeature = obterFeaturePerimetro(perimetro);
+    const areaBaseHa = perimetroFeature ? turf.area(perimetroFeature) / 10000 : 0;
+
+    if (!perimetroFeature || areaBaseHa <= 0) {
+      return { type: "FeatureCollection", features: [] };
+    }
 
     for (const feature of feicoes?.features || []) {
       if (!feature.geometry) continue;
 
-      let sobrepoe = false;
-      let areaSobrepostaHa = 0;
+      const calculo = calcularIntersecaoRobusta(perimetroFeature, feature);
+      const areaSobrepostaHa = calculo.areaHa || 0;
+      const sobrepoe = areaSobrepostaHa > 0.0001;
 
-      try {
-        if (turf.booleanIntersects(perimetro, feature)) {
-          sobrepoe = true;
-          let inter = null;
-          try {
-            inter = turf.intersect(turf.featureCollection([perimetro.features?.[0] || perimetro, feature]));
-          } catch {
-            inter = turf.intersect(perimetro.features?.[0] || perimetro, feature);
-          }
+      const featureBase = origem === "INTERMAT" ? normalizarAtributosIntermatFeature(feature) : feature;
+      const resumo = origem === "INTERMAT" ? resolverDadosIntermat(featureBase.properties) : montarResumoFeicaoAuto(featureBase, origem, idx + 1);
+      const areaTituloNumero = numeroPtBr(resumo.areaTitulo);
+      const percentualBase = areaBaseHa > 0 ? (areaSobrepostaHa / areaBaseHa) * 100 : 0;
+      const percentualTitulo = areaTituloNumero > 0 ? (areaSobrepostaHa / areaTituloNumero) * 100 : 0;
 
-          if (inter) areaSobrepostaHa = turf.area(inter) / 10000;
-        }
-      } catch {}
-
-      const resumo = montarResumoFeicaoAuto(feature, origem, idx + 1);
       resultado.push({
-        ...feature,
+        ...featureBase,
         properties: {
-          ...(feature.properties || {}),
+          ...(featureBase.properties || {}),
           __origem: origem,
-          __codigo: resumo.codigo,
-          __nome: resumo.nome,
-          __sncr: resumo.sncr,
-          __matricula: resumo.matricula,
-          __municipio: resumo.municipio,
-          __status: resumo.status,
+          __codigo: resumo.codigo || "-",
+          __tituloPrimitivo: origem === "INTERMAT" ? (resumo.tituloPrimitivo || nomeTituloIntermat(featureBase.properties)) : (resumo.tituloPrimitivo || resumo.denominacao || resumo.nome || "-"),
+          __nomeFazenda: origem === "INTERMAT" ? (resumo.nomeFazenda || nomeFazendaIntermat(featureBase.properties)) : (resumo.nomeFazenda || resumo.denominacao || resumo.nome || "-"),
+          __nome: origem === "INTERMAT" ? (resumo.tituloPrimitivo || nomeTituloIntermat(featureBase.properties)) : (resumo.denominacao || resumo.nome || "-"),
+          __sncr: resumo.sncr || "-",
+          __matricula: resumo.matricula || "-",
+          __municipio: resumo.municipio || "-",
+          __status: resumo.status || resumo.origem || "-",
+          __requerente: resumo.requerente || "-",
+          __registro: resumo.registro || "-",
+          __livro: resumo.livro || "-",
+          __folha: resumo.folha || "-",
+          __orgao: resumo.orgao || "-",
+          __areaTituloHa: areaTituloNumero,
           __sobrepoe: sobrepoe,
           __areaSobrepostaHa: Number(areaSobrepostaHa.toFixed(4)),
+          __percentualBase: Number(percentualBase.toFixed(2)),
+          __percentualTitulo: Number(percentualTitulo.toFixed(2)),
+          __metodoIntersecao: calculo.metodo,
           __cor: sobrepoe ? corSobreposicao(idx) : undefined,
         }
       });
       idx++;
     }
 
-    return {
-      type: "FeatureCollection",
-      features: resultado
-    };
+    return { type: "FeatureCollection", features: resultado };
   }
 
   async function executarAnaliseAutomaticaDoPerimetro(perimetro = geojsonAtual) {
@@ -2188,7 +4677,7 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
       return;
     }
 
-    setAutoAnaliseStatus("Executando análise automática: buscando CAR online e cruzando SIGEF local...");
+    setAutoAnaliseStatus("Executando análise automática: buscando CAR online, SIGEF local e INTERMAT local...");
     limparCamadasAutomaticas();
 
     const resumo = {
@@ -2201,14 +4690,32 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     };
 
     try {
-      // 1. CAR online por BBOX
-      const car = await buscarCarOnlinePorPerimetro(perimetro);
+      // 1. CAR online por BBOX + CAR local, quando disponível
+      const car = basesAnaliseAtivas.car ? await buscarCarOnlinePorPerimetro(perimetro) : { geojson: { type: "FeatureCollection", features: [] }, camada: "", erro: "CAR desativado pelo usuário" };
       resumo.carCamada = car.camada || "";
       resumo.erroCar = car.erro || "";
 
-      const carCruzado = cruzarFeicoesComPerimetro(perimetro, car.geojson, "CAR");
+      let carFeatures = [...(car.geojson?.features || [])];
+
+      if (carLocalGeojson?.features?.length) {
+        const bboxCarLocal = turf.bboxPolygon(bboxComFolga(perimetro, 0.10));
+        const candidatosCarLocal = [];
+
+        for (const feature of carLocalGeojson.features) {
+          if (!feature.geometry) continue;
+          try {
+            if (turf.booleanIntersects(bboxCarLocal, feature)) candidatosCarLocal.push(feature);
+          } catch {}
+          if (candidatosCarLocal.length >= 1500) break;
+        }
+
+        carFeatures = [...carFeatures, ...candidatosCarLocal];
+      }
+
+      const carCruzado = cruzarFeicoesComPerimetro(perimetro, { type: "FeatureCollection", features: carFeatures }, "CAR");
       resumo.carTotal = carCruzado.features.length;
       resumo.carSobrepostos = carCruzado.features.filter((f) => f.properties.__sobrepoe).length;
+      resumo.carLocal = carLocalGeojson?.features?.length || 0;
 
       setAutoCarGeojson(carCruzado);
       if (autoCamadas.car && carCruzado.features.length) desenharCamadaAutomatica(carCruzado, "CAR");
@@ -2237,10 +4744,34 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
       setAutoSigefGeojson(sigefCruzado);
       if (autoCamadas.sigef && sigefCruzado.features.length) desenharCamadaAutomatica(sigefCruzado, "SIGEF");
 
+      // 3. INTERMAT local, se houver base importada
+      let intermatCruzado = { type: "FeatureCollection", features: [] };
+
+      if (intermatLocalGeojson?.features?.length) {
+        const bboxIntermat = turf.bboxPolygon(bboxComFolga(perimetro, 0.10));
+        const candidatosIntermat = [];
+
+        for (const feature of intermatLocalGeojson.features) {
+          if (!feature.geometry) continue;
+          try {
+            if (turf.booleanIntersects(bboxIntermat, feature)) candidatosIntermat.push(normalizarAtributosIntermatFeature(feature));
+          } catch {}
+          if (candidatosIntermat.length >= 1500) break;
+        }
+
+        intermatCruzado = cruzarFeicoesComPerimetro(perimetro, { type: "FeatureCollection", features: candidatosIntermat }, "INTERMAT");
+      }
+
+      resumo.intermatTotal = intermatCruzado.features.length;
+      resumo.intermatSobrepostos = intermatCruzado.features.filter((f) => f.properties.__sobrepoe).length;
+
+      setAutoIntermatGeojson(intermatCruzado);
+      if (autoCamadas.intermat && intermatCruzado.features.length) desenharCamadaAutomatica(intermatCruzado, "INTERMAT");
+
       setAutoResumo(resumo);
 
       setAutoAnaliseStatus(
-        `Análise automática concluída. CAR: ${resumo.carSobrepostos}/${resumo.carTotal} sobrepostas. SIGEF: ${resumo.sigefSobrepostos}/${resumo.sigefTotal} sobrepostas.`
+        `Análise automática concluída. CAR: ${resumo.carSobrepostos}/${resumo.carTotal} sobrepostas. SIGEF: ${resumo.sigefSobrepostos}/${resumo.sigefTotal} sobrepostas. INTERMAT: ${resumo.intermatSobrepostos || 0}/${resumo.intermatTotal || 0} sobrepostas.`
       );
     } catch (error) {
       console.error(error);
@@ -2276,6 +4807,20 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
         desenharCamadaAutomatica(autoSigefGeojson, "SIGEF");
       }
     }
+    if (tipo === "intermat") {
+      const novo = !autoCamadas.intermat;
+      setAutoCamadas((s) => ({ ...s, intermat: novo }));
+
+      if (!novo && autoIntermatLayerRef.current && mapRef.current) {
+        mapRef.current.removeLayer(autoIntermatLayerRef.current);
+        autoIntermatLayerRef.current = null;
+      }
+
+      if (novo && autoIntermatGeojson?.features?.length) {
+        desenharCamadaAutomatica(autoIntermatGeojson, "INTERMAT");
+      }
+    }
+
   }
 
   function limparPerimetroAtual() {
@@ -2474,25 +5019,33 @@ R$ ${propostaForm.valor || "A definir"}`;
       desenharSobreposicoesDetalhadas(resultado);
     }
 
-    const mapaDataUrl = mapaRelatorioDataUrl || await capturarMapaComoImagem();
+    const mapaDataUrl = await capturarMapaComoImagem();
 
     const linhas = resultado.intersecoes.features.map((f, idx) => {
       const p = f.properties || {};
+      const nomePrincipal = p.__origem === "INTERMAT" ? (resolverDadosIntermat(p).tituloPrimitivo || nomeTituloIntermat(p)) : (p.__nome || "-");
+      const fazendaDenominacao = p.__origem === "INTERMAT" ? (resolverDadosIntermat(p).nomeFazenda || nomeFazendaIntermat(p)) : "-";
+
       return [
         String(idx + 1),
         p.__origem || "-",
         p.__codigo || "-",
         p.__sncr || "-",
-        p.__nome || "-",
+        nomePrincipal,
+        fazendaDenominacao,
         p.__matricula || "-",
         p.__municipio || "-",
         p.__status || "-",
-        `${Number(p.__areaSobrepostaHa || 0).toLocaleString("pt-BR")} ha`
+        `${Number(p.__areaSobrepostaHa || 0).toLocaleString("pt-BR")} ha`,
+        `${Number(p.__percentualBase || 0).toLocaleString("pt-BR")}%`,
+        `${Number(p.__percentualTitulo || 0).toLocaleString("pt-BR")}%`,
+        p.__requerente || "-",
+        p.__registro || "-"
       ];
     });
 
     const conteudoMapa = mapaDataUrl
-      ? `<p><strong>4. Mapa da análise de sobreposição</strong></p><p><img src="${mapaDataUrl}" style="width:680px;max-width:100%;border:1px solid #999" /></p><p><em>Figura 01 – Perímetro analisado e feições sobrepostas identificadas no cruzamento espacial.</em></p>`
+      ? `<p><strong>4. Mapa da análise de sobreposição</strong></p><p style="text-align:center;"><img src="${mapaDataUrl}" style="width:960px;max-width:100%;height:auto;border:1px solid #999;object-fit:contain;" /></p><p><em>Figura 01 – Mapa técnico limpo da análise de sobreposição, com legenda cartográfica e feições coloridas.</em></p>`
       : `<p><strong>4. Mapa da análise de sobreposição</strong></p><p><em>Mapa não capturado automaticamente. Recomenda-se gerar o relatório com o mapa visível na tela.</em></p>`;
 
     const legendaHtml = resultado.intersecoes.features.map((f, idx) => {
@@ -2502,7 +5055,7 @@ R$ ${propostaForm.valor || "A definir"}`;
         <td><span style="display:inline-block;width:14px;height:14px;background:${p.__cor};border:1px solid #333"></span></td>
         <td>${p.__origem || "-"}</td>
         <td>${p.__codigo || "-"}</td>
-        <td>${p.__nome || "-"}</td>
+        <td>${p.__origem === "INTERMAT" ? `${nomeTituloIntermat(p)} / ${nomeFazendaIntermat(p)}` : (p.__nome || "-")}</td>
       </tr>`;
     }).join("");
 
@@ -2553,13 +5106,13 @@ R$ ${propostaForm.valor || "A definir"}`;
 
   <h2>5. Legenda das feições sobrepostas</h2>
   <table>
-    <tr><th>#</th><th>Cor</th><th>Origem</th><th>Código</th><th>Nome/Identificação</th></tr>
+    <tr><th>#</th><th>Cor</th><th>Origem</th><th>Código/Nº CAR</th><th>Nome/Identificação</th></tr>
     ${legendaHtml}
   </table>
 
   <h2>6. Quadro técnico de sobreposições</h2>
   <table>
-    <tr><th>#</th><th>Origem</th><th>Código</th><th>SNCR/Cód. Imóvel</th><th>Nome</th><th>Matrícula</th><th>Município</th><th>Status</th><th>Área Sobreposta</th></tr>
+    <tr><th>#</th><th>Origem</th><th>Código</th><th>SNCR/Nº CAR</th><th>Título Primitivo</th><th>Fazenda/Denominação</th><th>Matrícula</th><th>Município</th><th>Status/Origem</th><th>Área Sobreposta</th><th>% Perímetro</th><th>% Título</th><th>Requerente</th><th>Registro</th></tr>
     ${tabelaHtml}
   </table>
 
@@ -2597,6 +5150,18 @@ R$ ${propostaForm.valor || "A definir"}`;
 
         <nav className="nav">
           <button className={tela === "dashboard" ? "active" : ""} onClick={() => setTela("dashboard")}>🏠 Dashboard</button>
+
+              <label className="file-button secondary-action">
+                Importar ZIPs SIGEF Brasil
+                <input
+                  type="file"
+                  accept=".zip"
+                  multiple
+                  onChange={importarSigefZipNacional}
+                  hidden
+                />
+              </label>
+
           <button className={tela === "analise" ? "active" : ""} onClick={() => setTela("analise")}>🗺️ Análise Territorial</button>
           <button className={tela === "clientes" ? "active" : ""} onClick={() => setTela("clientes")}>👤 Clientes</button>
           <button className={tela === "imoveis" ? "active" : ""} onClick={() => setTela("imoveis")}>🏡 Imóveis</button>
@@ -2676,6 +5241,9 @@ R$ ${propostaForm.valor || "A definir"}`;
                   <button type="button" className={autoCamadas.sigef ? "selected" : ""} onClick={() => alternarCamadaAutomatica("sigef")}>
                     {autoCamadas.sigef ? "SIGEF ligado" : "SIGEF desligado"}
                   </button>
+                  <button type="button" className={autoCamadas.intermat ? "selected" : ""} onClick={() => alternarCamadaAutomatica("intermat")}>
+                    {autoCamadas.intermat ? "INTERMAT ligado" : "INTERMAT desligado"}
+                  </button>
                 </div>
 
                 <button className="primary-button" type="button" onClick={() => executarAnaliseAutomaticaDoPerimetro()}>
@@ -2684,12 +5252,16 @@ R$ ${propostaForm.valor || "A definir"}`;
 
                 {autoAnaliseStatus && <pre className="result-box compact-result">{autoAnaliseStatus}</pre>}
 
+                {carCapabilitiesInfo && <pre className="result-box compact-result">{carCapabilitiesInfo}</pre>}
+
                 {autoResumo && (
                   <div className="auto-summary">
                     <span>CAR próximos: <strong>{autoResumo.carTotal}</strong></span>
                     <span>CAR sobrepostos: <strong>{autoResumo.carSobrepostos}</strong></span>
                     <span>SIGEF próximos: <strong>{autoResumo.sigefTotal}</strong></span>
                     <span>SIGEF sobrepostos: <strong>{autoResumo.sigefSobrepostos}</strong></span>
+                    <span>INTERMAT próximos: <strong>{autoResumo.intermatTotal || 0}</strong></span>
+                    <span>INTERMAT sobrepostos: <strong>{autoResumo.intermatSobrepostos || 0}</strong></span>
                   </div>
                 )}
               </div>
@@ -2841,6 +5413,33 @@ R$ ${propostaForm.valor || "A definir"}`;
                 <p className="muted">Base local: {sigefLocalNome}</p>
               )}
 
+              <label className="secondary-upload-button sigef-local-upload">
+                Importar Base CAR ZIP/GeoJSON
+                <input type="file" accept=".zip,.geojson,.json" onChange={importarBaseCarLocal} />
+              </label>
+
+              {carLocalNome && (
+                <p className="muted">Base CAR local: {carLocalNome}</p>
+              )}
+
+              {carLocalInfo && (
+                <pre className="result-box compact-result">{carLocalInfo}</pre>
+              )}
+
+              <label className="secondary-upload-button sigef-local-upload">
+                Importar Base INTERMAT ZIP/GeoJSON
+                <input type="file" accept=".zip,.geojson,.json" onChange={importarBaseIntermatLocal} />
+              </label>
+
+              {intermatLocalNome && (
+                <p className="muted">Base INTERMAT: {intermatLocalNome}</p>
+              )}
+              <small className="muted">Arquivo ZIP obrigatório: .SHP + .DBF + .PRJ + .SHX. SBN/SBX não substituem SHX.</small>
+
+              {intermatLocalInfo && (
+                <pre className="result-box compact-result">{intermatLocalInfo}</pre>
+              )}
+
               <div className="online-actions">
                 <button className="primary-button" type="button" onClick={consultarSigefPorCodigo} disabled={carregandoOnline}>Buscar online</button>
                 <button className="primary-button" type="button" onClick={buscarSigefNaBaseLocal}>Buscar na base local</button>
@@ -2867,10 +5466,65 @@ R$ ${propostaForm.valor || "A definir"}`;
                 <button className="primary-button" type="button" onClick={usarConsultaComoPerimetroAtual}>Usar feição como perímetro atual</button>
                 <button className="secondary-action" type="button" onClick={baixarRelatorioSobreposicao}>Baixar relatório de sobreposição</button>
                 <button className="secondary-action" type="button" onClick={gerarRelatorioWordCartograficoV22}>Relatório Word com mapa</button>
+                  <button type="button" className="secondary-action" onClick={() => exportarImagemSateliteRecortada("png")}>
+                    Imagem satélite PNG
+                  </button>
+                  <button type="button" className="secondary-action" onClick={() => exportarImagemSateliteRecortada("jpg")}>
+                    Imagem satélite JPG
+                  </button>
                 <small className="muted">Relatórios usam a análise automática CAR/SIGEF quando não houver consulta manual.</small>
               </div>
 
-              <div className="preview-card">
+              
+              <div className="sigef-brasil-panel">
+                <div className="sigef-brasil-header">
+                  <strong>Base SIGEF Brasil importada</strong>
+                  <button type="button" className="danger-lite" onClick={limparBaseSigefBrasil}>
+                    Limpar SIGEF
+                  </button>
+                </div>
+
+                <p>
+                  {sigefLocalGeojson?.features?.length || 0} feição(ões) carregada(s) em {sigefArquivosImportados.length} arquivo(s).
+                </p>
+
+                <label className="persist-toggle">
+                  <input
+                    type="checkbox"
+                    checked={sigefPersistenciaAtiva}
+                    onChange={(e) => setSigefPersistenciaAtiva(e.target.checked)}
+                  />
+                  Salvar base SIGEF no navegador para a próxima abertura
+                </label>
+
+                {sigefArquivosImportados.length > 0 && (
+                  <div className="sigef-files-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>UF</th>
+                          <th>Arquivo</th>
+                          <th>Feições</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sigefArquivosImportados.slice(-12).map((item) => (
+                          <tr key={item.assinatura || item.nome}>
+                            <td>{item.uf || "-"}</td>
+                            <td title={item.nome}>{item.nome}</td>
+                            <td>{item.features}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {sigefArquivosImportados.length > 12 && (
+                      <small>Mostrando os 12 arquivos mais recentes.</small>
+                    )}
+                  </div>
+                )}
+              </div>
+
+<div className="preview-card">
                 <h4>Pré-visualização de parcelas</h4>
                 <p className="muted">Ligue/desligue as camadas para avaliar visualmente sobreposição com KML, desenho ou GeoJSON importado.</p>
                 <div className="preview-buttons">
@@ -2883,7 +5537,36 @@ R$ ${propostaForm.valor || "A definir"}`;
                 </div>
               </div>
 
-              <div className="analysis-card">
+              
+              <div className="analysis-layer-selector">
+                <strong>Bases que entram na análise</strong>
+                <p>Escolha quais camadas serão consideradas no cruzamento.</p>
+                <div className="analysis-layer-buttons">
+                  <button
+                    type="button"
+                    className={basesAnaliseAtivas.sigef ? "layer-toggle active" : "layer-toggle"}
+                    onClick={() => alternarBaseAnalise("sigef")}
+                  >
+                    {basesAnaliseAtivas.sigef ? "SIGEF ligado" : "SIGEF desligado"}
+                  </button>
+                  <button
+                    type="button"
+                    className={basesAnaliseAtivas.car ? "layer-toggle active" : "layer-toggle"}
+                    onClick={() => alternarBaseAnalise("car")}
+                  >
+                    {basesAnaliseAtivas.car ? "CAR ligado" : "CAR desligado"}
+                  </button>
+                  <button
+                    type="button"
+                    className={basesAnaliseAtivas.intermat ? "layer-toggle active" : "layer-toggle"}
+                    onClick={() => alternarBaseAnalise("intermat")}
+                  >
+                    {basesAnaliseAtivas.intermat ? "INTERMAT ligado" : "INTERMAT desligado"}
+                  </button>
+                </div>
+              </div>
+
+<div className="analysis-card">
                 <h4>Análise de sobreposição</h4>
                 <p className="muted">Cruza o perímetro atual com a base SIGEF local e/ou a feição CAR/SIGEF consultada.</p>
                 <div className="export-buttons">
@@ -3054,3 +5737,63 @@ function TabelaAnalises({ analises, onRelatorio }) {
     </div>
   );
 }
+  function recortarAreaUtilCanvas(canvas) {
+    try {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const { width, height } = canvas;
+      const data = ctx.getImageData(0, 0, width, height).data;
+
+      let minX = width;
+      let minY = height;
+      let maxX = 0;
+      let maxY = 0;
+
+      // Detecta área realmente ocupada: ignora branco puro/quase branco.
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const i = (y * width + x) * 4;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const a = data[i + 3];
+
+          const quaseBranco = r > 245 && g > 245 && b > 245;
+          const transparente = a < 10;
+
+          if (!quaseBranco && !transparente) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+
+      if (maxX <= minX || maxY <= minY) return canvas;
+
+      const margem = 16;
+      minX = Math.max(0, minX - margem);
+      minY = Math.max(0, minY - margem);
+      maxX = Math.min(width, maxX + margem);
+      maxY = Math.min(height, maxY + margem);
+
+      const cropW = maxX - minX;
+      const cropH = maxY - minY;
+
+      // Se o corte for quase igual ao canvas, mantém.
+      if (cropW > width * 0.92 && cropH > height * 0.92) return canvas;
+
+      const out = document.createElement("canvas");
+      out.width = cropW;
+      out.height = cropH;
+      const outCtx = out.getContext("2d");
+      outCtx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+      return out;
+    } catch (error) {
+      console.warn("Não foi possível recortar área útil do mapa", error);
+      return canvas;
+    }
+  }
+
+
+

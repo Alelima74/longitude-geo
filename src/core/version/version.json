@@ -1,0 +1,8 @@
+{
+  "version": "V67 Enterprise",
+  "build": "6.7.0",
+  "base_estavel": "V64",
+  "status": "Base limpa sem servidor local e sem GNSS ativo",
+  "data": "2026-07-07",
+  "observacao": "Refatoração estrutural inicial. App.jsx funcional preservado."
+}
