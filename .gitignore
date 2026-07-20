@@ -1,5 +1,37 @@
-node_modules
-dist
-.vite
+# Dependências e build
+node_modules/
+dist/
+
+# Variáveis locais e segredos
 .env
 .env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backups e arquivos temporários
+backup_*/
+backup-*/
+ATUALIZACAO_INSTALADA.json
+BUILD_VALIDATION*.txt
+nao-copiar.txt
+
+# Atualizadores antigos
+ATUALIZAR_*.bat
+ATUALIZAR_*.cmd
+INSTALAR_*.bat
+INSTALAR_*.cmd
+INSTALAR_*.ps1
+
+# Arquivos do Windows e editores
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# Arquivos locais de configuração do npm
+.npmrc

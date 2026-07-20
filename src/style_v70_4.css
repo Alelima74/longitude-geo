@@ -1,0 +1,10 @@
+.cloud-map-switch{display:flex;gap:6px}.cloud-map-switch button{border:1px solid #ca8a04;background:#052419;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700}.cloud-map-switch button.active{background:#fde047;color:#102117}
+
+.cloud-neighbor-card { border-color: rgba(168, 85, 247, .45); }
+.cloud-neighbor-controls { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin:12px 0; }
+.cloud-neighbor-controls label { display:flex; flex-direction:column; gap:6px; min-width:280px; color:#d1fae5; }
+.cloud-neighbor-controls select { background:#02140c; color:#fff; border:1px solid rgba(255,255,255,.18); border-radius:9px; padding:10px; }
+.cloud-relation-tag { display:inline-block; border-radius:999px; padding:4px 8px; font-weight:800; font-size:11px; background:#831843; color:#fce7f3; }
+.cloud-relation-tag.confrontante { background:#581c87; color:#f3e8ff; }
+.cloud-relation-tag.próximo, .cloud-relation-tag.proximo { background:#9d174d; color:#fce7f3; }
+.cloud-relation-tag.sobreposto { background:#9a3412; color:#ffedd5; }
