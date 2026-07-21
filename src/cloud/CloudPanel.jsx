@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import shp from "shpjs";
 import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import { kml as kmlToGeoJson } from "@tmcw/togeojson";
 import { utmToLatLon } from "./utm";
 import logoLongitude from "../assets/logo-longitude-relatorio.png";
@@ -561,8 +563,8 @@ export default function CloudPanel() {
     container.style.position = "fixed";
     container.style.left = "-20000px";
     container.style.top = "0";
-    container.style.width = "1120px";
-    container.style.height = "620px";
+    container.style.width = "1400px";
+    container.style.height = "480px";
     container.style.background = "#ffffff";
     container.style.zIndex = "-9999";
     document.body.appendChild(container);
@@ -703,10 +705,10 @@ export default function CloudPanel() {
         backgroundColor: "#ffffff",
         scale: 2,
         logging: false,
-        width: 1120,
-        height: 620,
-        windowWidth: 1120,
-        windowHeight: 620,
+        width: 1400,
+        height: 480,
+        windowWidth: 1400,
+        windowHeight: 480,
         scrollX: 0,
         scrollY: 0,
       });
@@ -720,21 +722,295 @@ export default function CloudPanel() {
     }
   }
 
+
+  function reportFileBaseName() {
+    const raw = String(queryDescription || "consulta_territorial")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 70);
+    return `Relatorio_Longitude_${raw || "consulta"}_${new Date().toISOString().slice(0, 10)}`;
+  }
+
+  async function buildPdfBlob() {
+    if (!results.length) {
+      throw new Error("Faça uma consulta com resultados antes de gerar o PDF.");
+    }
+
+    setPhase("Gerando mapa e montando PDF");
+    const [mapImage, logoData] = await Promise.all([
+      createReportMapImage(),
+      assetToDataUrl(logoLongitude),
+    ]);
+
+    const pdf = new jsPDF({
+      orientation: "landscape",
+      unit: "mm",
+      format: "a4",
+      compress: true,
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 12;
+    const usableWidth = pageWidth - margin * 2;
+
+    if (logoData) {
+      pdf.addImage(logoData, "PNG", margin, 8, 24, 24, undefined, "FAST");
+    }
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(18);
+    pdf.setTextColor(7, 89, 133);
+    pdf.text("Longitude Geo Intelligence", margin + 30, 16);
+
+    pdf.setFontSize(12);
+    pdf.setTextColor(22, 101, 52);
+    pdf.text("Relatório de Consulta Territorial", margin + 30, 23);
+
+    pdf.setDrawColor(22, 101, 52);
+    pdf.setLineWidth(0.8);
+    pdf.line(margin, 34, pageWidth - margin, 34);
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    pdf.setTextColor(20, 33, 26);
+    pdf.text(`Data: ${new Date().toLocaleString("pt-BR")}`, margin, 41);
+    const queryLines = pdf.splitTextToSize(`Consulta: ${queryDescription || "-"}`, usableWidth * 0.66);
+    pdf.text(queryLines, margin, 47);
+    pdf.text(`Mapa: ${mapType === "satellite" ? "Imagem de satélite — Esri World Imagery" : "Mapa padrão — OpenStreetMap"}`, margin, 47 + queryLines.length * 4);
+    pdf.text(`Ocorrências: ${results.length} | Bases: ${[...new Set(results.map((row) => row.origem))].join(", ")}`, pageWidth - margin, 41, { align: "right" });
+
+    const mapY = Math.max(57, 51 + queryLines.length * 4);
+    let mapHeight = 0;
+    if (mapImage) {
+      const imageProperties = pdf.getImageProperties(mapImage);
+      const imageRatio =
+        Number(imageProperties?.width) > 0 && Number(imageProperties?.height) > 0
+          ? Number(imageProperties.width) / Number(imageProperties.height)
+          : 1400 / 480;
+
+      const maxMapHeight = 93;
+      mapHeight = Math.min(maxMapHeight, usableWidth / imageRatio);
+      const mapWidth = mapHeight * imageRatio;
+      const mapX = margin + (usableWidth - mapWidth) / 2;
+
+      pdf.addImage(
+        mapImage,
+        "PNG",
+        mapX,
+        mapY,
+        mapWidth,
+        mapHeight,
+        undefined,
+        "FAST",
+      );
+
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(71, 85, 105);
+      pdf.text(
+        `Perímetro consultado e feições encontradas — ${mapType === "satellite" ? "Esri World Imagery" : "OpenStreetMap"}`,
+        pageWidth / 2,
+        mapY + mapHeight + 4,
+        { align: "center" },
+      );
+    }
+
+    const body = results.map((row) => [
+      row.origem || "-",
+      row.uf || "-",
+      row.codigo || "-",
+      row.nome_fazenda || row.nome || "-",
+      row.titulo_primitivo || "-",
+      [row.matricula, row.cns].filter(Boolean).join(" / ") || "-",
+      row.area_intersecao_ha != null
+        ? Number(row.area_intersecao_ha).toLocaleString("pt-BR", { maximumFractionDigits: 4 })
+        : "-",
+      row.percentual_sobre_perimetro != null
+        ? `${Number(row.percentual_sobre_perimetro).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}%`
+        : "-",
+    ]);
+
+    autoTable(pdf, {
+      startY: mapY + mapHeight + 9,
+      head: [["Base", "UF", "Código", "Nome/Fazenda", "Título", "Matrícula/CNS", "Sobreposição ha", "% perímetro"]],
+      body,
+      theme: "grid",
+      margin: { left: margin, right: margin },
+      styles: { fontSize: 6.6, cellPadding: 1.5, overflow: "linebreak", valign: "top" },
+      headStyles: { fillColor: [226, 232, 240], textColor: [20, 33, 26], fontStyle: "bold" },
+      columnStyles: {
+        0: { cellWidth: 15 },
+        1: { cellWidth: 9 },
+        2: { cellWidth: 39 },
+        3: { cellWidth: 43 },
+        4: { cellWidth: 31 },
+        5: { cellWidth: 36 },
+        6: { cellWidth: 22 },
+        7: { cellWidth: 21 },
+      },
+      didDrawPage: () => {
+        pdf.setFontSize(7);
+        pdf.setTextColor(100);
+        pdf.text(
+          `Longitude Geo Intelligence — página ${pdf.getNumberOfPages()}`,
+          pageWidth - margin,
+          pageHeight - 6,
+          { align: "right" },
+        );
+      },
+    });
+
+    if (neighbors.length) {
+      const neighborBody = neighbors.map((row) => [
+        row.relacao || "-",
+        row.origem || "-",
+        row.uf || "-",
+        row.codigo || "-",
+        row.nome_fazenda || row.nome || "-",
+        [row.matricula, row.cns].filter(Boolean).join(" / ") || "-",
+        row.distancia_m != null
+          ? Number(row.distancia_m).toLocaleString("pt-BR", { maximumFractionDigits: 3 })
+          : "-",
+      ]);
+
+      autoTable(pdf, {
+        startY: (pdf.lastAutoTable?.finalY || 20) + 8,
+        head: [["Relação", "Base", "UF", "Código", "Nome/Fazenda", "Matrícula/CNS", "Distância m"]],
+        body: neighborBody,
+        theme: "grid",
+        margin: { left: margin, right: margin },
+        styles: { fontSize: 7, cellPadding: 1.6, overflow: "linebreak" },
+        headStyles: { fillColor: [243, 232, 255], textColor: [88, 28, 135], fontStyle: "bold" },
+      });
+    }
+
+    let finalY = (pdf.lastAutoTable?.finalY || 155) + 9;
+    if (finalY > pageHeight - 30) {
+      pdf.addPage();
+      finalY = 18;
+    }
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(9);
+    pdf.setTextColor(20, 33, 26);
+    pdf.text("Conclusão", margin, finalY);
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    const conclusion = `A consulta identificou ${results.length} ocorrência(s) sobreposta(s)${
+      neighbors.length ? ` e ${neighbors.length} imóvel(is) vizinho(s)/confrontante(s)` : ""
+    } nas versões ativas das bases geoespaciais cadastradas.`;
+    pdf.text(pdf.splitTextToSize(conclusion, usableWidth), margin, finalY + 5);
+
+    pdf.setFontSize(7);
+    pdf.setTextColor(100);
+    pdf.text(
+      pdf.splitTextToSize(
+        "Uso técnico preliminar. Conferir os dados e documentos oficiais antes de qualquer ato registral, administrativo ou judicial.",
+        usableWidth,
+      ),
+      margin,
+      finalY + 13,
+    );
+
+    return pdf.output("blob");
+  }
+
+  async function downloadPdfReport() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const blob = await buildPdfBlob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${reportFileBaseName()}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      setMessage("PDF gerado e disponibilizado para download.");
+    } catch (error) {
+      setMessage(`Não foi possível gerar o PDF: ${error.message}`);
+    } finally {
+      setLoading(false);
+      setPhase("");
+    }
+  }
+
+  async function sharePdfReport() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const blob = await buildPdfBlob();
+      const file = new File([blob], `${reportFileBaseName()}.pdf`, {
+        type: "application/pdf",
+      });
+
+      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+        await navigator.share({
+          title: "Relatório Longitude Geo",
+          text: "Relatório de Consulta Territorial gerado pelo Longitude Geo Intelligence.",
+          files: [file],
+        });
+        setMessage("Relatório compartilhado.");
+      } else {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = file.name;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+        setMessage("O compartilhamento direto não está disponível neste navegador; o PDF foi baixado.");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        setMessage(`Não foi possível compartilhar o PDF: ${error.message}`);
+      }
+    } finally {
+      setLoading(false);
+      setPhase("");
+    }
+  }
+
   async function printReport() {
     if (!results.length) return setMessage("Faça uma consulta com resultados antes de gerar o relatório.");
-    setLoading(true); setPhase("Preparando relatório");
-    let mapImage = ""; let logoData = "";
-    try {
-      mapImage = await createReportMapImage();
-      logoData = await assetToDataUrl(logoLongitude);
-    } catch (error) {
-      setMessage(`Não foi possível preparar o mapa do relatório: ${error.message}`);
-    }
-    const rows = results.map((row) => `<tr><td>${safeHtml(row.origem)}</td><td>${safeHtml(row.uf)}</td><td>${safeHtml(row.codigo)}</td><td>${safeHtml(row.nome || row.nome_fazenda)}</td><td>${safeHtml(row.titulo_primitivo)}</td><td>${safeHtml(row.matricula || row.cns)}</td><td>${safeHtml(row.area_intersecao_ha ?? "-")}</td><td>${safeHtml(row.percentual_sobre_perimetro ?? "-")}</td></tr>`).join("");
+
     const report = window.open("", "_blank", "width=1200,height=850");
-    if (!report) { setLoading(false); return setMessage("O navegador bloqueou a janela do relatório. Libere pop-ups."); }
-    report.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório Longitude Geo</title><style>@page{size:A4 landscape;margin:12mm}body{font-family:Arial,sans-serif;color:#14211a;margin:0}.header{display:flex;align-items:center;border-bottom:3px solid #166534;padding-bottom:10px}.logo{width:95px;height:95px;object-fit:contain;margin-right:18px}.header h1{color:#075985;margin:0 0 4px}.header h2{color:#166534;margin:0}.meta{padding:10px;background:#f1f5f9;border-left:5px solid #16a34a;margin:12px 0}.map{width:100%;height:430px;object-fit:contain;border:1px solid #94a3b8}.caption{font-size:10px;color:#475569;text-align:center}.summary{display:flex;gap:10px;margin:12px 0}.summary div{background:#ecfdf5;border:1px solid #86efac;padding:8px 12px;border-radius:6px}table{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}th,td{border:1px solid #cbd5e1;padding:5px;vertical-align:top;word-break:break-word}th{background:#e2e8f0}.actions{margin:10px 0}.footer{margin-top:12px;font-size:9px;color:#64748b}@media print{.actions{display:none}}</style></head><body><div class="actions"><button onclick="window.print()">Imprimir / Salvar em PDF</button></div><div class="header">${logoData ? `<img class="logo" src="${logoData}">` : ""}<div><h1>Longitude Geo Intelligence</h1><h2>Relatório de Consulta Territorial</h2></div></div><div class="meta"><b>Data:</b> ${new Date().toLocaleString("pt-BR")}<br><b>Consulta:</b> ${safeHtml(queryDescription)}<br><b>Mapa:</b> ${mapType === "satellite" ? "Imagem de satélite" : "Mapa padrão"}</div><div class="summary"><div><b>Ocorrências:</b> ${results.length}</div><div><b>Bases:</b> ${[...new Set(results.map(r=>r.origem))].join(", ")}</div></div>${mapImage ? `<img class="map" src="${mapImage}"><div class="caption">Perímetro consultado e feições encontradas - ${mapType === "satellite" ? "Esri World Imagery" : "OpenStreetMap"}</div>` : ""}<h2>Feições sobrepostas</h2><table><thead><tr><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Título</th><th>Matrícula/CNS</th><th>Sobreposição ha</th><th>% perímetro</th></tr></thead><tbody>${rows}</tbody></table>${neighbors.length ? `<h2>Vizinhos e confrontantes</h2><table><thead><tr><th>Relação</th><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Matrícula/CNS</th><th>Distância (m)</th></tr></thead><tbody>${neighborRows}</tbody></table>` : ""}<p><b>Conclusão:</b> A consulta identificou ${results.length} ocorrência(s) sobreposta(s)${neighbors.length ? ` e ${neighbors.length} imóvel(is) vizinho(s)/confrontante(s)` : ""} nas versões ativas das bases geoespaciais cadastradas.</p><div class="footer">Uso técnico preliminar. Conferir os dados e documentos oficiais antes de qualquer ato registral, administrativo ou judicial.</div></body></html>`);
-    report.document.close(); setLoading(false); setPhase("");
+    if (!report) {
+      return setMessage("O navegador bloqueou a janela. Use Baixar PDF ou permita pop-ups para visualizar.");
+    }
+
+    report.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Preparando relatório</title><style>body{font-family:Arial,sans-serif;background:#f8fafc;color:#14211a;display:grid;place-items:center;height:100vh;margin:0}.box{padding:28px;border:1px solid #cbd5e1;border-radius:14px;background:#fff;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.08)}.spinner{width:38px;height:38px;border:5px solid #d1fae5;border-top-color:#16a34a;border-radius:50%;margin:0 auto 15px;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="box"><div class="spinner"></div><h2>Preparando relatório...</h2><p>Gerando mapa, tabelas e logotipo.</p></div></body></html>`);
+    report.document.close();
+
+    setLoading(true);
+    setPhase("Preparando relatório");
+    try {
+      const [mapImage, logoData] = await Promise.all([
+        createReportMapImage(),
+        assetToDataUrl(logoLongitude),
+      ]);
+
+      const rows = results.map((row) => `<tr><td>${safeHtml(row.origem)}</td><td>${safeHtml(row.uf)}</td><td>${safeHtml(row.codigo)}</td><td>${safeHtml(row.nome || row.nome_fazenda)}</td><td>${safeHtml(row.titulo_primitivo)}</td><td>${safeHtml(row.matricula || row.cns)}</td><td>${safeHtml(row.area_intersecao_ha ?? "-")}</td><td>${safeHtml(row.percentual_sobre_perimetro ?? "-")}</td></tr>`).join("");
+      const neighborRows = neighbors.map((row) => `<tr><td>${safeHtml(row.relacao)}</td><td>${safeHtml(row.origem)}</td><td>${safeHtml(row.uf)}</td><td>${safeHtml(row.codigo)}</td><td>${safeHtml(row.nome || row.nome_fazenda)}</td><td>${safeHtml(row.matricula || row.cns)}</td><td>${safeHtml(row.distancia_m ?? "-")}</td></tr>`).join("");
+
+      report.document.open();
+      report.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório Longitude Geo</title><style>@page{size:A4 landscape;margin:12mm}body{font-family:Arial,sans-serif;color:#14211a;margin:0}.header{display:flex;align-items:center;border-bottom:3px solid #166534;padding-bottom:10px}.logo{width:95px;height:95px;object-fit:contain;margin-right:18px}.header h1{color:#075985;margin:0 0 4px}.header h2{color:#166534;margin:0}.meta{padding:10px;background:#f1f5f9;border-left:5px solid #16a34a;margin:12px 0}.map{width:100%;height:430px;object-fit:contain;border:1px solid #94a3b8}.caption{font-size:10px;color:#475569;text-align:center}.summary{display:flex;gap:10px;margin:12px 0}.summary div{background:#ecfdf5;border:1px solid #86efac;padding:8px 12px;border-radius:6px}table{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}th,td{border:1px solid #cbd5e1;padding:5px;vertical-align:top;word-break:break-word}th{background:#e2e8f0}.actions{display:flex;gap:8px;margin:10px 0;position:sticky;top:0;background:#fff;padding:8px 0}.actions button{padding:9px 13px;border:0;border-radius:8px;font-weight:700;cursor:pointer}.print{background:#22c55e}.close{background:#e2e8f0}.footer{margin-top:12px;font-size:9px;color:#64748b}@media print{.actions{display:none}}</style></head><body><div class="actions"><button class="print" onclick="window.print()">Imprimir / Salvar em PDF</button><button class="close" onclick="window.close()">Fechar</button></div><div class="header">${logoData ? `<img class="logo" src="${logoData}">` : ""}<div><h1>Longitude Geo Intelligence</h1><h2>Relatório de Consulta Territorial</h2></div></div><div class="meta"><b>Data:</b> ${new Date().toLocaleString("pt-BR")}<br><b>Consulta:</b> ${safeHtml(queryDescription)}<br><b>Mapa:</b> ${mapType === "satellite" ? "Imagem de satélite" : "Mapa padrão"}</div><div class="summary"><div><b>Ocorrências:</b> ${results.length}</div><div><b>Bases:</b> ${[...new Set(results.map((row) => row.origem))].join(", ")}</div></div>${mapImage ? `<img class="map" src="${mapImage}"><div class="caption">Perímetro consultado e feições encontradas — ${mapType === "satellite" ? "Esri World Imagery" : "OpenStreetMap"}</div>` : ""}<h2>Feições sobrepostas</h2><table><thead><tr><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Título</th><th>Matrícula/CNS</th><th>Sobreposição ha</th><th>% perímetro</th></tr></thead><tbody>${rows}</tbody></table>${neighbors.length ? `<h2>Vizinhos e confrontantes</h2><table><thead><tr><th>Relação</th><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Matrícula/CNS</th><th>Distância (m)</th></tr></thead><tbody>${neighborRows}</tbody></table>` : ""}<p><b>Conclusão:</b> A consulta identificou ${results.length} ocorrência(s) sobreposta(s)${neighbors.length ? ` e ${neighbors.length} imóvel(is) vizinho(s)/confrontante(s)` : ""} nas versões ativas das bases geoespaciais cadastradas.</p><div class="footer">Uso técnico preliminar. Conferir os dados e documentos oficiais antes de qualquer ato registral, administrativo ou judicial.</div></body></html>`);
+      report.document.close();
+    } catch (error) {
+      report.document.open();
+      report.document.write(`<html><body style="font-family:Arial;padding:30px"><h2>Não foi possível gerar o relatório</h2><p>${safeHtml(error.message)}</p></body></html>`);
+      report.document.close();
+      setMessage(`Não foi possível preparar o relatório: ${error.message}`);
+    } finally {
+      setLoading(false);
+      setPhase("");
+    }
   }
 
   async function refreshCloudData() {
@@ -860,7 +1136,7 @@ export default function CloudPanel() {
   }
 
   return <section className="cloud-page">
-    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V72.1</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
+    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V72.3</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
 
     <div className="cloud-query-tabs">
       <button type="button" className={queryMode === "utm" ? "active" : ""} onClick={() => setQueryMode("utm")}>Coordenada UTM</button>
@@ -893,7 +1169,7 @@ export default function CloudPanel() {
     </div>
 
     <div className="cloud-card">
-      <div className="cloud-card-title"><h3>Ocorrências encontradas</h3>{results.length > 0 && <div className="cloud-export-actions"><button className="secondary-action" onClick={exportOverlappingFeaturesKml}>KML das feições sobrepostas</button><button className="secondary-action" onClick={exportIntersectionsKml}>KML dos recortes</button><button className="secondary-action" onClick={exportGeoJson}>GeoJSON das feições</button><button className="primary-button compact" onClick={printReport}>Relatório / PDF</button></div>}</div>
+      <div className="cloud-card-title"><h3>Ocorrências encontradas</h3>{results.length > 0 && <div className="cloud-export-actions"><button className="secondary-action" onClick={exportOverlappingFeaturesKml}>KML das feições sobrepostas</button><button className="secondary-action" onClick={exportIntersectionsKml}>KML dos recortes</button><button className="secondary-action" onClick={exportGeoJson}>GeoJSON das feições</button><button className="secondary-action" onClick={printReport}>Visualizar relatório</button><button className="primary-button compact" onClick={downloadPdfReport} disabled={loading}>Baixar PDF</button><button className="primary-button compact" onClick={sharePdfReport} disabled={loading}>Compartilhar PDF</button></div>}</div>
       <div className="cloud-table-wrap"><table className="cloud-table"><thead><tr><th>Base</th><th>UF</th><th>Código</th><th>Nome/Identificação</th><th>Título primitivo</th><th>Fazenda</th><th>Matrícula/CNS</th><th>Sobreposição ha</th><th>% perímetro</th><th>Referência</th></tr></thead><tbody>{results.map((row, index) => <tr key={`${row.feature_id}-${index}`}><td><span className={`cloud-base-tag ${String(row.origem).toLowerCase()}`}>{row.origem}</span></td><td>{row.uf || "-"}</td><td>{row.codigo || "-"}</td><td>{row.nome || "-"}</td><td>{row.titulo_primitivo || "-"}</td><td>{row.nome_fazenda || "-"}</td><td>{[row.matricula, row.cns].filter(Boolean).join(" / ") || "-"}</td><td>{row.area_intersecao_ha != null ? Number(row.area_intersecao_ha).toLocaleString("pt-BR", { maximumFractionDigits: 4 }) : "-"}</td><td>{row.percentual_sobre_perimetro != null ? `${Number(row.percentual_sobre_perimetro).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}%` : "-"}</td><td>{row.data_referencia || "-"}</td></tr>)}{!results.length && <tr><td colSpan="10">Nenhuma consulta realizada.</td></tr>}</tbody></table></div>
     </div>
 

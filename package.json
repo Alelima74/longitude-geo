@@ -15,13 +15,15 @@
     "@mapbox/shp-write": "^0.4.0",
     "docx": "^8.5.0",
     "html2canvas": "^1.4.1",
-    "shpjs": "^6.1.0"
+    "shpjs": "^6.1.0",
+    "jspdf": "^3.0.1",
+    "jspdf-autotable": "^5.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1"
   },
-  "version": "7.2.0-rc.1",
-  "name": "longitude-geo-v72-release-candidate",
+  "version": "7.2.2",
+  "name": "longitude-geo-v72-2-pdf-mobile",
   "engines": {
     "node": "20.x"
   }
