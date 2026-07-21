@@ -20,8 +20,8 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1"
   },
-  "version": "7.1.0",
-  "name": "longitude-geo-v71",
+  "version": "7.2.0-rc.1",
+  "name": "longitude-geo-v72-release-candidate",
   "engines": {
     "node": "20.x"
   }

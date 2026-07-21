@@ -542,18 +542,194 @@ export default function CloudPanel() {
     });
   }
 
+
+  function waitForLeafletTiles(tileLayer, timeoutMs = 12000) {
+    return new Promise((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+      tileLayer.once("load", finish);
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
+  async function createReportMapImage() {
+    const container = document.createElement("div");
+    container.style.position = "fixed";
+    container.style.left = "-20000px";
+    container.style.top = "0";
+    container.style.width = "1120px";
+    container.style.height = "620px";
+    container.style.background = "#ffffff";
+    container.style.zIndex = "-9999";
+    document.body.appendChild(container);
+
+    let reportMap = null;
+    try {
+      reportMap = L.map(container, {
+        zoomControl: false,
+        attributionControl: false,
+        preferCanvas: true,
+        fadeAnimation: false,
+        zoomAnimation: false,
+        markerZoomAnimation: false,
+      }).setView([-15.6, -56.1], 5);
+
+      const tileLayer = mapType === "satellite"
+        ? L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 20, crossOrigin: true }
+          )
+        : L.tileLayer(
+            "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            { maxZoom: 20, crossOrigin: true }
+          );
+
+      const tilePromise = waitForLeafletTiles(tileLayer);
+      tileLayer.addTo(reportMap);
+
+      const bounds = [];
+
+      if (queryAreaGeometry) {
+        const layer = L.geoJSON(
+          { type: "Feature", geometry: queryAreaGeometry, properties: {} },
+          {
+            style: {
+              color: "#ffea00",
+              weight: 5,
+              fillColor: "#ffea00",
+              fillOpacity: 0.04,
+            },
+          }
+        ).addTo(reportMap);
+        const layerBounds = layer.getBounds();
+        if (layerBounds.isValid()) bounds.push(layerBounds);
+      }
+
+      if (point) {
+        L.circleMarker([point.lat, point.lon], {
+          radius: 9,
+          color: "#ffea00",
+          weight: 4,
+          fillColor: "#f59e0b",
+          fillOpacity: 0.95,
+        }).addTo(reportMap);
+        bounds.push(L.latLngBounds([[point.lat, point.lon], [point.lat, point.lon]]));
+      }
+
+      const resultFeatures = results.map((row) => {
+        const geometry = resultGeometry(row);
+        return geometry
+          ? { type: "Feature", geometry, properties: row }
+          : null;
+      }).filter(Boolean);
+
+      if (resultFeatures.length) {
+        const layer = L.geoJSON(
+          { type: "FeatureCollection", features: resultFeatures },
+          {
+            style: (feature) => ({
+              color:
+                feature.properties.origem === "SIGEF"
+                  ? "#2563eb"
+                  : feature.properties.origem === "CAR"
+                    ? "#16a34a"
+                    : feature.properties.origem === "INCRA_2A_EDICAO"
+                      ? "#7c3aed"
+                      : "#f97316",
+              weight: 3,
+              fillOpacity: 0.18,
+            }),
+          }
+        ).addTo(reportMap);
+        const layerBounds = layer.getBounds();
+        if (layerBounds.isValid()) bounds.push(layerBounds);
+      }
+
+      const neighborFeatures = neighbors.map((row) => {
+        const geometry = fullFeatureGeometry(row);
+        return geometry
+          ? { type: "Feature", geometry, properties: row }
+          : null;
+      }).filter(Boolean);
+
+      if (neighborFeatures.length) {
+        const layer = L.geoJSON(
+          { type: "FeatureCollection", features: neighborFeatures },
+          {
+            style: (feature) => ({
+              color:
+                feature.properties.relacao === "CONFRONTANTE"
+                  ? "#a855f7"
+                  : "#ec4899",
+              weight: 3,
+              dashArray:
+                feature.properties.relacao === "CONFRONTANTE"
+                  ? null
+                  : "8 5",
+              fillOpacity: 0.04,
+            }),
+          }
+        ).addTo(reportMap);
+        const layerBounds = layer.getBounds();
+        if (layerBounds.isValid()) bounds.push(layerBounds);
+      }
+
+      reportMap.invalidateSize(false);
+
+      if (bounds.length) {
+        let combined = bounds[0];
+        bounds.slice(1).forEach((current) => {
+          combined = combined.extend(current);
+        });
+        reportMap.fitBounds(combined.pad(0.12), {
+          maxZoom: 18,
+          animate: false,
+          padding: [28, 28],
+        });
+      }
+
+      reportMap.invalidateSize(false);
+
+      await tilePromise;
+      await new Promise((resolve) => setTimeout(resolve, 900));
+
+      const canvas = await html2canvas(container, {
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: "#ffffff",
+        scale: 2,
+        logging: false,
+        width: 1120,
+        height: 620,
+        windowWidth: 1120,
+        windowHeight: 620,
+        scrollX: 0,
+        scrollY: 0,
+      });
+
+      return canvas.toDataURL("image/png");
+    } finally {
+      try {
+        reportMap?.remove();
+      } catch {}
+      container.remove();
+    }
+  }
+
   async function printReport() {
     if (!results.length) return setMessage("Faça uma consulta com resultados antes de gerar o relatório.");
     setLoading(true); setPhase("Preparando relatório");
     let mapImage = ""; let logoData = "";
-    const mapElement = document.getElementById("cloud-coordinate-map");
-    const controls = mapElement?.querySelectorAll(".leaflet-control-container");
     try {
-      controls?.forEach((el) => { el.dataset.oldDisplay = el.style.display; el.style.display = "none"; });
-      const canvas = await html2canvas(mapElement, { useCORS: true, backgroundColor: "#ffffff", scale: 2 });
-      mapImage = canvas.toDataURL("image/png");
+      mapImage = await createReportMapImage();
       logoData = await assetToDataUrl(logoLongitude);
-    } catch {} finally { controls?.forEach((el) => { el.style.display = el.dataset.oldDisplay || ""; }); }
+    } catch (error) {
+      setMessage(`Não foi possível preparar o mapa do relatório: ${error.message}`);
+    }
     const rows = results.map((row) => `<tr><td>${safeHtml(row.origem)}</td><td>${safeHtml(row.uf)}</td><td>${safeHtml(row.codigo)}</td><td>${safeHtml(row.nome || row.nome_fazenda)}</td><td>${safeHtml(row.titulo_primitivo)}</td><td>${safeHtml(row.matricula || row.cns)}</td><td>${safeHtml(row.area_intersecao_ha ?? "-")}</td><td>${safeHtml(row.percentual_sobre_perimetro ?? "-")}</td></tr>`).join("");
     const report = window.open("", "_blank", "width=1200,height=850");
     if (!report) { setLoading(false); return setMessage("O navegador bloqueou a janela do relatório. Libere pop-ups."); }
@@ -684,7 +860,7 @@ export default function CloudPanel() {
   }
 
   return <section className="cloud-page">
-    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V70</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
+    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V72.1</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
 
     <div className="cloud-query-tabs">
       <button type="button" className={queryMode === "utm" ? "active" : ""} onClick={() => setQueryMode("utm")}>Coordenada UTM</button>
