@@ -7,6 +7,8 @@ import autoTable from "jspdf-autotable";
 import { kml as kmlToGeoJson } from "@tmcw/togeojson";
 import { utmToLatLon } from "./utm";
 import logoLongitude from "../assets/logo-longitude-relatorio.png";
+import "./cloud-v73-1.css";
+
 import {
   activateVersion,
   clearSession,
@@ -283,6 +285,47 @@ export default function CloudPanel() {
   const [versions, setVersions] = useState([]);
   const [imports, setImports] = useState([]);
   const [mapType, setMapType] = useState("standard");
+  const [activeBases, setActiveBases] = useState({
+    SIGEF: true,
+    CAR: true,
+    INTERMAT: true,
+    INCRA_2A_EDICAO: true,
+  });
+  const [selectedResultKeys, setSelectedResultKeys] = useState([]);
+  const [selectedNeighborKeys, setSelectedNeighborKeys] = useState([]);
+
+  function rowKey(row, index = 0) {
+    return String(row.feature_id || row.id || `${row.origem}-${row.codigo}-${index}`);
+  }
+
+  function baseEnabled(row) {
+    return activeBases[row.origem] !== false;
+  }
+
+  const visibleResults = results.filter(baseEnabled);
+  const visibleNeighbors = neighbors.filter(baseEnabled);
+  const selectedResults = visibleResults.filter((row, index) => selectedResultKeys.includes(rowKey(row, index)));
+  const selectedNeighbors = visibleNeighbors.filter((row, index) => selectedNeighborKeys.includes(rowKey(row, index)));
+
+  function enabledOrigins() {
+    return Object.entries(activeBases)
+      .filter(([, enabled]) => enabled)
+      .map(([base]) => base);
+  }
+
+  function toggleBase(base) {
+    setActiveBases((current) => ({ ...current, [base]: !current[base] }));
+  }
+
+  function toggleResult(row, index) {
+    const key = rowKey(row, index);
+    setSelectedResultKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  }
+
+  function toggleNeighbor(row, index) {
+    const key = rowKey(row, index);
+    setSelectedNeighborKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  }
 
   const isAdmin = session?.user?.app_metadata?.role === "admin";
   const configured = cloudConfigured();
@@ -330,7 +373,7 @@ export default function CloudPanel() {
       }).addTo(map);
       boundsGroup.push(L.latLngBounds([[point.lat, point.lon], [point.lat, point.lon]]));
     }
-    const features = results.map((row) => {
+    const features = visibleResults.map((row) => {
       const geometry = resultGeometry(row);
       return geometry ? { type: "Feature", geometry, properties: row } : null;
     }).filter(Boolean);
@@ -349,7 +392,7 @@ export default function CloudPanel() {
       const bounds = resultLayerRef.current.getBounds();
       if (bounds.isValid()) boundsGroup.push(bounds);
     }
-    const neighborFeatures = neighbors.map((row) => {
+    const neighborFeatures = visibleNeighbors.map((row) => {
       const geometry = fullFeatureGeometry(row);
       return geometry ? { type: "Feature", geometry, properties: row } : null;
     }).filter(Boolean);
@@ -374,7 +417,7 @@ export default function CloudPanel() {
       boundsGroup.slice(1).forEach((bounds) => { combined = combined.extend(bounds); });
       if (combined.isValid()) map.fitBounds(combined.pad(0.18), { maxZoom: 17 });
     }
-  }, [point, queryAreaGeometry, results, neighbors]);
+  }, [point, queryAreaGeometry, results, neighbors, activeBases]);
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -407,8 +450,9 @@ export default function CloudPanel() {
         setQueryDescription(`Geográfica: latitude ${converted.lat.toFixed(8)}, longitude ${converted.lon.toFixed(8)}`);
       }
       setPoint(converted);
-      const rows = await queryPoint(converted.lon, converted.lat);
+      const rows = await queryPoint(converted.lon, converted.lat, enabledOrigins());
       setResults(rows);
+      setSelectedResultKeys(rows.map((row, index) => rowKey(row, index)));
       setMessage(rows.length ? `${rows.length} ocorrência(s) encontrada(s) nas bases ativas.` : "Nenhuma feição ativa contém esta coordenada.");
     } catch (error) {
       setResults([]); setMessage(`Falha na consulta: ${error.message}`);
@@ -423,8 +467,9 @@ export default function CloudPanel() {
       const geometry = await readPerimeterFile(perimeterFile);
       setQueryAreaGeometry(geometry);
       setQueryDescription(`Perímetro importado: ${perimeterFile.name}`);
-      const rows = await queryGeometry(geometry);
+      const rows = await queryGeometry(geometry, enabledOrigins());
       setResults(rows);
+      setSelectedResultKeys(rows.map((row, index) => rowKey(row, index)));
       setMessage(rows.length ? `${rows.length} feição(ões) sobreposta(s) ao perímetro.` : "Nenhuma feição ativa sobrepõe o perímetro.");
     } catch (error) {
       setResults([]);
@@ -465,7 +510,8 @@ export default function CloudPanel() {
 
   function exportGeoJson() {
     if (!results.length) return setMessage("Faça uma consulta com resultados antes de exportar.");
-    const collection = rowsFeatureCollection(results, fullFeatureGeometry);
+    const exportRows = selectedResults.length ? selectedResults : visibleResults;
+    const collection = rowsFeatureCollection(exportRows, fullFeatureGeometry);
     downloadBlob(JSON.stringify(collection, null, 2), "application/geo+json", `longitude_geo_feicoes_sobrepostas_${new Date().toISOString().slice(0, 10)}.geojson`);
   }
 
@@ -489,7 +535,7 @@ export default function CloudPanel() {
 
   function exportOverlappingFeaturesKml() {
     rowsToKml(
-      results,
+      selectedResults.length ? selectedResults : visibleResults,
       fullFeatureGeometry,
       "Longitude Geo — Feições completas sobrepostas",
       `longitude_geo_feicoes_sobrepostas_${new Date().toISOString().slice(0, 10)}.kml`,
@@ -509,7 +555,7 @@ export default function CloudPanel() {
 
   function exportNeighborsKml() {
     rowsToKml(
-      neighbors,
+      selectedNeighbors.length ? selectedNeighbors : visibleNeighbors,
       fullFeatureGeometry,
       "Longitude Geo — Imóveis vizinhos e confrontantes",
       `longitude_geo_vizinhos_${new Date().toISOString().slice(0, 10)}.kml`,
@@ -524,6 +570,7 @@ export default function CloudPanel() {
       const distance = Math.max(0, Math.min(500, Number(neighborDistance) || 0));
       const rows = await queryNeighbors(queryAreaGeometry, distance);
       setNeighbors(rows);
+      setSelectedNeighborKeys(rows.map((row, index) => rowKey(row, index)));
       setMessage(rows.length
         ? `${rows.length} imóvel(is) vizinho(s), confrontante(s) ou próximo(s) encontrado(s) em até ${distance} m.`
         : `Nenhum vizinho foi encontrado nas bases ativas em até ${distance} m do perímetro.`);
@@ -1136,12 +1183,26 @@ export default function CloudPanel() {
   }
 
   return <section className="cloud-page">
-    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V72.3</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
+    <div className="cloud-header"><div><h2>Longitude Geo Cloud — V73.2 RC</h2><p>Consulta por coordenada UTM, geográfica ou perímetro e manutenção das bases nacionais.</p></div><div className="cloud-header-actions"><span className={isAdmin ? "cloud-admin-badge" : "cloud-user-badge"}>{isAdmin ? "Administrador" : "Consulta"}</span><button className="secondary-action" onClick={logout}>Sair</button></div></div>
 
     <div className="cloud-query-tabs">
       <button type="button" className={queryMode === "utm" ? "active" : ""} onClick={() => setQueryMode("utm")}>Coordenada UTM</button>
       <button type="button" className={queryMode === "geographic" ? "active" : ""} onClick={() => setQueryMode("geographic")}>Coordenada geográfica</button>
       <button type="button" className={queryMode === "perimeter" ? "active" : ""} onClick={() => setQueryMode("perimeter")}>Importar perímetro</button>
+    </div>
+
+    <div className="cloud-card cloud-base-selector">
+      <div>
+        <h3>Bases usadas na análise</h3>
+        <p>Ligue ou desligue as bases. O mapa, as tabelas, os vizinhos e as exportações obedecem a esta seleção.</p>
+      </div>
+      <div className="cloud-base-buttons">
+        {Object.entries(activeBases).map(([base, enabled]) => (
+          <button key={base} type="button" className={enabled ? "active" : ""} onClick={() => toggleBase(base)}>
+            {base === "INCRA_2A_EDICAO" ? "INCRA 2ª Edição" : base} {enabled ? "ligada" : "desligada"}
+          </button>
+        ))}
+      </div>
     </div>
 
     <div className="cloud-grid">
@@ -1169,8 +1230,42 @@ export default function CloudPanel() {
     </div>
 
     <div className="cloud-card">
-      <div className="cloud-card-title"><h3>Ocorrências encontradas</h3>{results.length > 0 && <div className="cloud-export-actions"><button className="secondary-action" onClick={exportOverlappingFeaturesKml}>KML das feições sobrepostas</button><button className="secondary-action" onClick={exportIntersectionsKml}>KML dos recortes</button><button className="secondary-action" onClick={exportGeoJson}>GeoJSON das feições</button><button className="secondary-action" onClick={printReport}>Visualizar relatório</button><button className="primary-button compact" onClick={downloadPdfReport} disabled={loading}>Baixar PDF</button><button className="primary-button compact" onClick={sharePdfReport} disabled={loading}>Compartilhar PDF</button></div>}</div>
-      <div className="cloud-table-wrap"><table className="cloud-table"><thead><tr><th>Base</th><th>UF</th><th>Código</th><th>Nome/Identificação</th><th>Título primitivo</th><th>Fazenda</th><th>Matrícula/CNS</th><th>Sobreposição ha</th><th>% perímetro</th><th>Referência</th></tr></thead><tbody>{results.map((row, index) => <tr key={`${row.feature_id}-${index}`}><td><span className={`cloud-base-tag ${String(row.origem).toLowerCase()}`}>{row.origem}</span></td><td>{row.uf || "-"}</td><td>{row.codigo || "-"}</td><td>{row.nome || "-"}</td><td>{row.titulo_primitivo || "-"}</td><td>{row.nome_fazenda || "-"}</td><td>{[row.matricula, row.cns].filter(Boolean).join(" / ") || "-"}</td><td>{row.area_intersecao_ha != null ? Number(row.area_intersecao_ha).toLocaleString("pt-BR", { maximumFractionDigits: 4 }) : "-"}</td><td>{row.percentual_sobre_perimetro != null ? `${Number(row.percentual_sobre_perimetro).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}%` : "-"}</td><td>{row.data_referencia || "-"}</td></tr>)}{!results.length && <tr><td colSpan="10">Nenhuma consulta realizada.</td></tr>}</tbody></table></div>
+      <div className="cloud-card-title">
+        <div>
+          <h3>Ocorrências encontradas</h3>
+          <p>Marque somente as feições que deseja visualizar e exportar. Sem marcação, a exportação considera todas as feições das bases ligadas.</p>
+        </div>
+        {visibleResults.length > 0 && <div className="cloud-export-actions">
+          <button className="secondary-action" onClick={() => setSelectedResultKeys(visibleResults.map((row, index) => rowKey(row, index)))}>Marcar todas</button>
+          <button className="secondary-action" onClick={() => setSelectedResultKeys([])}>Desmarcar todas</button>
+          <button className="secondary-action" onClick={exportOverlappingFeaturesKml}>KML das selecionadas</button>
+          <button className="secondary-action" onClick={exportIntersectionsKml}>KML dos recortes</button>
+          <button className="secondary-action" onClick={exportGeoJson}>GeoJSON</button>
+          <button className="secondary-action" onClick={printReport}>Visualizar relatório</button>
+          <button className="primary-button compact" onClick={downloadPdfReport} disabled={loading}>Baixar PDF</button>
+          <button className="primary-button compact" onClick={sharePdfReport} disabled={loading}>Compartilhar PDF</button>
+        </div>}
+      </div>
+      <div className="cloud-table-wrap">
+        <table className="cloud-table">
+          <thead><tr><th>Usar</th><th>Base</th><th>UF</th><th>Código</th><th>Nome/Identificação</th><th>Título primitivo</th><th>Fazenda</th><th>Matrícula/CNS</th><th>Sobreposição ha</th><th>% perímetro</th><th>Referência</th></tr></thead>
+          <tbody>
+            {visibleResults.map((row, index) => {
+              const checked = selectedResultKeys.includes(rowKey(row, index));
+              return <tr key={rowKey(row, index)} className={checked ? "cloud-row-selected" : ""}>
+                <td><input type="checkbox" checked={checked} onChange={() => toggleResult(row, index)}/></td>
+                <td><span className={`cloud-base-tag ${String(row.origem).toLowerCase()}`}>{row.origem}</span></td>
+                <td>{row.uf || "-"}</td><td>{row.codigo || "-"}</td><td>{row.nome || "-"}</td><td>{row.titulo_primitivo || "-"}</td>
+                <td>{row.nome_fazenda || "-"}</td><td>{[row.matricula, row.cns].filter(Boolean).join(" / ") || "-"}</td>
+                <td>{row.area_intersecao_ha != null ? Number(row.area_intersecao_ha).toLocaleString("pt-BR", { maximumFractionDigits: 4 }) : "-"}</td>
+                <td>{row.percentual_sobre_perimetro != null ? `${Number(row.percentual_sobre_perimetro).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}%` : "-"}</td>
+                <td>{row.data_referencia || "-"}</td>
+              </tr>;
+            })}
+            {!visibleResults.length && <tr><td colSpan="11">Nenhuma feição das bases atualmente ligadas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     {queryAreaGeometry && <div className="cloud-card cloud-neighbor-card">
@@ -1179,7 +1274,11 @@ export default function CloudPanel() {
           <h3>Análise de vizinhos e confrontantes</h3>
           <p>Localiza imóveis cadastrados cujos limites tocam ou estão próximos do perímetro analisado. Use distância 0 m para confrontação exata ou uma tolerância para diferenças entre levantamentos.</p>
         </div>
-        {neighbors.length > 0 && <button className="secondary-action" type="button" onClick={exportNeighborsKml}>Baixar KML dos vizinhos</button>}
+        {visibleNeighbors.length > 0 && <div className="cloud-export-actions">
+          <button className="secondary-action" type="button" onClick={() => setSelectedNeighborKeys(visibleNeighbors.map((row, index) => rowKey(row, index)))}>Marcar todos</button>
+          <button className="secondary-action" type="button" onClick={() => setSelectedNeighborKeys([])}>Desmarcar todos</button>
+          <button className="secondary-action" type="button" onClick={exportNeighborsKml}>KML dos vizinhos selecionados</button>
+        </div>}
       </div>
       <div className="cloud-neighbor-controls">
         <label>Distância de tolerância
@@ -1197,7 +1296,23 @@ export default function CloudPanel() {
           {loading && phase.includes("confrontantes") ? phase : "Analisar vizinhos"}
         </button>
       </div>
-      <div className="cloud-table-wrap"><table className="cloud-table"><thead><tr><th>Relação</th><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Matrícula/CNS</th><th>Distância (m)</th><th>Referência</th></tr></thead><tbody>{neighbors.map((row, index) => <tr key={`neighbor-${row.feature_id}-${index}`}><td><span className={`cloud-relation-tag ${String(row.relacao || "").toLowerCase()}`}>{row.relacao || "PRÓXIMO"}</span></td><td>{row.origem}</td><td>{row.uf || "-"}</td><td>{row.codigo || "-"}</td><td>{row.nome_fazenda || row.nome || "-"}</td><td>{[row.matricula, row.cns].filter(Boolean).join(" / ") || "-"}</td><td>{row.distancia_m != null ? Number(row.distancia_m).toLocaleString("pt-BR", { maximumFractionDigits: 3 }) : "-"}</td><td>{row.data_referencia || "-"}</td></tr>)}{!neighbors.length && <tr><td colSpan="8">Clique em “Analisar vizinhos” para localizar confrontantes e imóveis próximos.</td></tr>}</tbody></table></div>
+      <div className="cloud-table-wrap"><table className="cloud-table">
+        <thead><tr><th>Usar</th><th>Relação</th><th>Base</th><th>UF</th><th>Código</th><th>Nome/Fazenda</th><th>Matrícula/CNS</th><th>Distância (m)</th><th>Referência</th></tr></thead>
+        <tbody>
+          {visibleNeighbors.map((row, index) => {
+            const checked = selectedNeighborKeys.includes(rowKey(row, index));
+            return <tr key={`neighbor-${rowKey(row, index)}`} className={checked ? "cloud-row-selected" : ""}>
+              <td><input type="checkbox" checked={checked} onChange={() => toggleNeighbor(row, index)}/></td>
+              <td><span className={`cloud-relation-tag ${String(row.relacao || "").toLowerCase()}`}>{row.relacao || "PRÓXIMO"}</span></td>
+              <td>{row.origem}</td><td>{row.uf || "-"}</td><td>{row.codigo || "-"}</td><td>{row.nome_fazenda || row.nome || "-"}</td>
+              <td>{[row.matricula, row.cns].filter(Boolean).join(" / ") || "-"}</td>
+              <td>{row.distancia_m != null ? Number(row.distancia_m).toLocaleString("pt-BR", { maximumFractionDigits: 3 }) : "-"}</td>
+              <td>{row.data_referencia || "-"}</td>
+            </tr>;
+          })}
+          {!visibleNeighbors.length && <tr><td colSpan="9">Clique em “Analisar vizinhos” ou ligue uma base com resultados.</td></tr>}
+        </tbody>
+      </table></div>
     </div>}
 
     {isAdmin ? <>

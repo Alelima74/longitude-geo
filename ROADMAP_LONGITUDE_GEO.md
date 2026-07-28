@@ -1,24 +1,14 @@
 # ROADMAP LONGITUDE GEO
 
-## Versão atual
-V69.1 — Cloud Importer
+## Produção
+V72.4 PWA.
 
-## Implementado
-- consulta por coordenada UTM;
-- banco PostGIS compartilhado;
-- login Supabase;
-- perfil administrador;
-- upload privado do ZIP original;
-- leitura de SHP dentro do ZIP;
-- normalização SIGEF/CAR/INTERMAT;
-- importação em lotes;
-- controle de versões e ativação segura;
-- histórico de importações.
+## Release Candidate
+V73.1 RC — cadastros reutilizáveis, seleção de bases/feições e coordenadas.
 
-## Limite atual
-- processamento no navegador;
-- ZIP original até 50 MB no plano gratuito;
-- bases muito grandes exigem processador servidor.
-
-## Próxima versão
-V69.2 — processador assíncrono para grandes bases e consulta por código/nome.
+## Próximo ciclo
+- Vincular diretamente o resultado da Cloud ao processo de Peças Técnicas.
+- Busca por certificação SIGEF/UUID.
+- Gerar a representação gráfica da declaração de limite.
+- Incorporar fielmente cabeçalhos, rodapés, tabelas e paginação dos modelos enviados.
+- Planta A4/A3/A2/A1 e DXF.

@@ -1,8 +1,8 @@
 {
-  "version": "V67 Enterprise",
-  "build": "6.7.0",
-  "base_estavel": "V64",
-  "status": "Base limpa sem servidor local e sem GNSS ativo",
-  "data": "2026-07-07",
-  "observacao": "Refatoração estrutural inicial. App.jsx funcional preservado."
+  "version": "74.1.3-rc.1",
+  "label": "Motor Documental — delimitadores corrigidos",
+  "environment": "preview",
+  "releaseDate": "2026-07-28",
+  "status": "release-candidate",
+  "build": "74131"
 }

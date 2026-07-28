@@ -1,24 +1,59 @@
+function parseCoordinateNumber(value, fieldName) {
+  const raw = String(value ?? "").trim().replace(/\s+/g, "");
+  if (!raw) throw new Error(`Informe ${fieldName}.`);
+
+  let normalized = raw;
+
+  // Brazilian thousands separators: 8.365.000 or 599.000
+  if (/^[+-]?\d{1,3}(\.\d{3})+(,\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  } else if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/,/g, "");
+  } else {
+    normalized = normalized.replace(",", ".");
+  }
+
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) {
+    throw new Error(`${fieldName} inválido: “${value}”.`);
+  }
+  return number;
+}
+
 export function utmToLatLon(easting, northing, zone, hemisphere = "S") {
-  const E = Number(String(easting).replace(",", "."));
-  const N = Number(String(northing).replace(",", "."));
-  const Z = Number(zone);
-  if (!Number.isFinite(E) || !Number.isFinite(N) || !Number.isFinite(Z) || Z < 1 || Z > 60) {
-    throw new Error("Informe coordenadas UTM e fuso válidos.");
+  const E = parseCoordinateNumber(easting, "a coordenada Este");
+  const N = parseCoordinateNumber(northing, "a coordenada Norte");
+  const Z = Number(String(zone).trim());
+  const H = String(hemisphere || "S").trim().toUpperCase();
+
+  if (!Number.isInteger(Z) || Z < 1 || Z > 60) {
+    throw new Error("Informe um fuso UTM inteiro entre 1 e 60.");
+  }
+  if (!["S", "N"].includes(H)) {
+    throw new Error("Informe o hemisfério Sul ou Norte.");
+  }
+  if (E < 100000 || E > 900000) {
+    throw new Error("A coordenada Este normalmente deve estar entre 100.000 m e 900.000 m.");
+  }
+  if (N < 0 || N > 10000000) {
+    throw new Error("A coordenada Norte deve estar entre 0 m e 10.000.000 m.");
   }
 
   const a = 6378137.0;
   const eccSquared = 0.00669438002290;
   const k0 = 0.9996;
-  let x = E - 500000.0;
+  const x = E - 500000.0;
   let y = N;
-  if (String(hemisphere).toUpperCase() === "S") y -= 10000000.0;
+  if (H === "S") y -= 10000000.0;
 
   const longOrigin = (Z - 1) * 6 - 180 + 3;
   const eccPrimeSquared = eccSquared / (1 - eccSquared);
   const M = y / k0;
   const mu = M / (a * (1 - eccSquared / 4 - 3 * eccSquared ** 2 / 64 - 5 * eccSquared ** 3 / 256));
   const e1 = (1 - Math.sqrt(1 - eccSquared)) / (1 + Math.sqrt(1 - eccSquared));
-  const fp = mu
+
+  const fp =
+    mu
     + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu)
     + (21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu)
     + (151 * e1 ** 3 / 96) * Math.sin(6 * mu)
@@ -46,6 +81,10 @@ export function utmToLatLon(easting, northing, zone, hemisphere = "S") {
     + (5 - 2 * C1 + 28 * T1 - 3 * C1 ** 2 + 8 * eccPrimeSquared + 24 * T1 ** 2) * D ** 5 / 120
   ) / cosfp;
   lon = longOrigin + lon * 180 / Math.PI;
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    throw new Error("A conversão UTM resultou em coordenada inválida. Confira fuso, hemisfério, Este e Norte.");
+  }
 
   return { lat, lon };
 }

@@ -166,30 +166,37 @@ async function apiFetch(path, options = {}, requireLogin = false) {
   }
 }
 
-export async function queryPoint(lon, lat) {
-  return (await apiFetch("/rest/v1/rpc/consultar_camadas_por_ponto", {
+export async function queryPoint(lon, lat, origins = []) {
+  return (await apiFetch("/rest/v1/rpc/consultar_camadas_por_ponto_v732", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ p_longitude: lon, p_latitude: lat }),
+    body: JSON.stringify({
+      p_longitude: lon,
+      p_latitude: lat,
+      p_origens: origins.length ? origins : null,
+    }),
   })) || [];
 }
 
-export async function queryGeometry(geometry) {
-  try {
-    return (await apiFetch("/rest/v1/rpc/consultar_camadas_por_geometria", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ p_geometria_geojson: geometry }) })) || [];
-  } catch (error) {
-    if (!/timeout|canceling statement/i.test(String(error?.message || ""))) throw error;
-    return (await apiFetch("/rest/v1/rpc/consultar_camadas_por_geometria_rapida", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ p_geometria_geojson: geometry }) })) || [];
-  }
+export async function queryGeometry(geometry, origins = []) {
+  return (await apiFetch("/rest/v1/rpc/consultar_camadas_por_geometria_v732", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      p_geometria_geojson: geometry,
+      p_origens: origins.length ? origins : null,
+    }),
+  })) || [];
 }
 
-export async function queryNeighbors(geometry, distanceMeters = 20) {
-  return (await apiFetch("/rest/v1/rpc/consultar_vizinhos_por_geometria", {
+export async function queryNeighbors(geometry, distanceMeters = 20, origins = []) {
+  return (await apiFetch("/rest/v1/rpc/consultar_vizinhos_por_geometria_v732", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       p_geometria_geojson: geometry,
       p_distancia_m: Number(distanceMeters) || 0,
+      p_origens: origins.length ? origins : null,
     }),
   })) || [];
 }

@@ -1,0 +1,9 @@
+
+.cloud-base-selector{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:14px}
+.cloud-base-selector h3,.cloud-base-selector p{margin:0}.cloud-base-selector p{margin-top:5px;color:#c8f3dc}
+.cloud-base-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.cloud-base-buttons button{border:1px solid #316750;background:#031e15;color:#d7fae7;border-radius:999px;padding:8px 12px;font-weight:800}
+.cloud-base-buttons button.active{background:#ffe000;color:#102018;border-color:#ffe000}
+.cloud-row-selected{background:rgba(31,213,139,.08)}
+.cloud-table input[type="checkbox"]{width:18px;height:18px;accent-color:#34d399}
+@media(max-width:850px){.cloud-base-selector{flex-direction:column;align-items:flex-start}.cloud-base-buttons{justify-content:flex-start}}

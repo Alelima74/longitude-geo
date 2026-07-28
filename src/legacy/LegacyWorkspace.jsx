@@ -11,6 +11,7 @@ import { APP_NAME, APP_VERSION, APP_BUILD, APP_STORAGE_KEY } from "../core/confi
 import { criarAssinaturaArquivo, gravarBaseSigef, lerBaseSigef, apagarBaseSigef, agruparSigefPorUf } from "../core/storage/sigefStorage";
 import CloudPanel from "../cloud/CloudPanel";
 import EnterpriseModules from "../components/EnterpriseModules";
+import TechnicalPiecesModule from "../modules/technicalPieces/TechnicalPiecesModule";
 import {
   AlignmentType,
   Document,
@@ -5164,6 +5165,7 @@ R$ ${propostaForm.valor || "A definir"}`;
           <button className={tela === "imoveis" ? "active" : ""} onClick={() => setTela("imoveis")}>🏡 Imóveis</button>
           <button className={tela === "integracoes" ? "active" : ""} onClick={() => setTela("integracoes")}>📍 SIGEF / CAR / INTERMAT</button>
           <button className={tela === "cloud" ? "active" : ""} onClick={() => setTela("cloud")}>⭐ Cloud / Consulta Territorial</button>
+          <button className={tela === "pecas" ? "active" : ""} onClick={() => setTela("pecas")}>🧾 Peças Técnicas</button>
           <button className={tela === "relatorios" ? "active" : ""} onClick={() => setTela("relatorios")}>📑 Relatórios</button>
           <button className={tela === "propostas" ? "active" : ""} onClick={() => setTela("propostas")}>💰 Propostas</button>
           <button className={tela === "config" ? "active" : ""} onClick={() => setTela("config")}>⚙️ Configurações</button>
@@ -5196,6 +5198,8 @@ R$ ${propostaForm.valor || "A definir"}`;
         {["dashboard", "clientes", "imoveis", "relatorios", "propostas", "config"].includes(tela) && (
           <EnterpriseModules module={tela} />
         )}
+
+        {tela === "pecas" && <TechnicalPiecesModule />}
 
         {tela === "dashboard_legacy" && (
           <section className="page">
@@ -5695,6 +5699,7 @@ function tituloTela(tela) {
     imovelDetalhe: "Detalhe do Imóvel",
     integracoes: "SIGEF / CAR / INTERMAT",
     cloud: "Cloud / Consulta Territorial",
+    pecas: "Peças Técnicas Inteligentes",
     relatorios: "Relatórios",
     propostas: "Propostas",
     config: "Configurações",
