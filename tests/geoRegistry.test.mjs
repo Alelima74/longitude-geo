@@ -8,6 +8,7 @@ import { buildCartorialPieces } from "../src/modules/geoRegistry/cartorialPieces
 import { parseRegistryDocument } from "../src/modules/geoRegistry/registryDocumentParser.mjs";
 import { assessNativeText, chooseRegistryText } from "../src/modules/geoRegistry/registryOcrPolicy.mjs";
 import { validateGeometry, verticesToFeature } from "../src/modules/geoRegistry/geometryValidationService.mjs";
+import { applyMemorialData, applyRegistryData } from "../src/modules/geoRegistry/projectSourceState.mjs";
 
 const validText = `MEMORIAL DESCRITIVO
 Denominação: FAZENDA TESTE ANÔNIMA
@@ -22,6 +23,24 @@ Datum: SIRGAS2000
 G61-M-3064 15° 30' 00,00" S 56° 00' 00,00" W
 G61-M-3065 15° 30' 10,00" S 56° 00' 00,00" W
 G61-M-3066 15° 30' 10,00" S 56° 00' 10,00" W`;
+
+const chacaraCanaaText = `MEMORIAL DESCRITIVO
+Denominação do imóvel: CHACARA CANAA
+Proprietário(a): MARCIA BERNARDES DA CUNHA
+Matrícula do imóvel: 103328
+CNS: 06.344-6
+Município/UF: Nossa Senhora do Livramento-MT
+Área: 11,1578 ha
+Perímetro: 1.392,9 m
+Certificação: 81bacc4a-978b-441c-a810-8697046229d0
+Responsável Técnico(a): ALEXANDRE MAGNO GOMES DE LIMA
+Código de credenciamento: G61
+Sistema Geodésico de referência: SIRGAS 2000
+G61-M-3063 15°42'09,314" S 56°29'41,396" W
+G61-M-3064 15°42'10,000" S 56°29'42,000" W
+G61-M-3065 15°42'11,000" S 56°29'43,000" W
+G61-M-3066 15°42'12,000" S 56°29'42,000" W
+G61-M-3067 15°42'11,000" S 56°29'41,000" W`;
 
 test("interpreta campos principais e números com vírgula decimal", () => {
   const result = parseSigefMemorialText(validText);
@@ -284,4 +303,13 @@ test("confrontante manual permanece separado do documental e pode alimentar quad
   const manual = { origin: "RECONSTRUÍDO", boundarySource: "MANUAL", fromVertex: "A", toVertex: "B", azimuthDocument: "90°", distanceDocument: 100, boundaryName: "FAZENDA MANUAL" };
   const project = { property: {}, registry: {}, sigef: {}, geodesy: {}, vertices: [], checklist: [], boundaries: [manual] };
   const pieces = buildCartorialPieces(project); assert.equal(pieces.boundaries.rows.length, 1); assert.equal(pieces.boundaries.rows[0].boundarySource, "MANUAL");
+});
+
+test("regressão permanente CHACARA CANAA preserva todos os campos e cinco vértices", () => {
+  const result = parseSigefMemorialText(chacaraCanaaText);
+  assert.equal(result.data.property.name, "CHACARA CANAA"); assert.equal(result.data.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(result.data.registry.registrationNumber, "103328"); assert.equal(result.data.registry.cns, "06.344-6"); assert.equal(result.data.property.municipality, "Nossa Senhora do Livramento"); assert.equal(result.data.property.area, 11.1578); assert.equal(result.data.property.perimeter, 1392.9); assert.equal(result.data.sigef.certificationId, "81bacc4a-978b-441c-a810-8697046229d0"); assert.equal(result.data.sigef.surveyor, "ALEXANDRE MAGNO GOMES DE LIMA"); assert.equal(result.data.sigef.accreditationCode, "G61"); assert.equal(result.data.geodesy.datum, "SIRGAS 2000"); assert.deepEqual(result.data.vertices.map((item) => item.code), ["G61-M-3063", "G61-M-3064", "G61-M-3065", "G61-M-3066", "G61-M-3067"]); assert.ok(result.data.vertices.every((item) => item.latitudeDocument && item.longitudeDocument && Number.isFinite(item.latitudeDecimal) && Number.isFinite(item.longitudeDecimal))); assert.ok(verticesToFeature(result.data.vertices));
+});
+
+test("dados registrais não sobrescrevem Memorial, SIGEF, geometria ou vértices", () => {
+  const parsed = parseSigefMemorialText(chacaraCanaaText).data; const geometry = verticesToFeature(parsed.vertices); const initial = { property: {}, registry: {}, sigef: {}, geodesy: {}, vertices: [], boundaries: [], geometry, calculated: { area: 11.1578 } }; const withMemorial = applyMemorialData(initial, parsed); const withRegistry = applyRegistryData(withMemorial, { registrationNumber: "REG-999", owner: "OUTRO TITULAR", confirmed: true }); assert.equal(withRegistry.memorial.registry.registrationNumber, "103328"); assert.equal(withRegistry.memorial.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(withRegistry.sigef.certificationId, "81bacc4a-978b-441c-a810-8697046229d0"); assert.equal(withRegistry.vertices.length, 5); assert.equal(withRegistry.geometry, geometry); assert.deepEqual(withRegistry.calculated, { area: 11.1578 });
 });

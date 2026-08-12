@@ -4,6 +4,14 @@
 
 Este arquivo registra somente fatos comprováveis no repositório. A presença de código ou SQL não comprova implantação em produção. Datas são informadas apenas quando já constam em metadados existentes.
 
+## Recuperação do Averbação GEO — 12/08/2026
+
+- isoladas as fontes Memorial e documento registral para impedir sobrescrita entre elas;
+- adicionada regressão automatizada dos campos e cinco vértices do caso CHACARA CANAA;
+- conferência registral bloqueada enquanto o documento registral não estiver processado;
+- confrontantes mantidos em modo estritamente documental, sem exibir dados técnicos não extraídos;
+- testes automatizados e build aprovados; importação manual do PDF real ainda pendente.
+
 ## Estado atual documentado
 
 ### V74.1.3
