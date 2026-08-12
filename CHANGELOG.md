@@ -24,6 +24,15 @@ Este arquivo registra somente fatos comprováveis no repositório. A presença d
 - preparado contrato para DOCX sem implementar geração definitiva;
 - Planta, Declaração de Limites e Cartas de Anuência permanecem explicitamente em preparação/próxima etapa.
 
+### Adequação aos modelos Longitude
+
+- cadastro cartorial ampliado para proprietário, cônjuge, imóvel, responsável técnico e procedimento;
+- Requerimento alinhado ao conteúdo variável do modelo real de retificação de área;
+- Memorial formatado com identificação e narrativa automática do perímetro;
+- Declaração de Reconhecimento de Limite habilitada individualmente por confrontante;
+- previews aproximados às geometrias A4 dos modelos DOCX existentes em `public/templates`;
+- planta técnica mantida pendente porque o PDF-modelo não está disponível no repositório.
+
 ## Estado atual documentado
 
 ### V74.1.3
