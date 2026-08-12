@@ -15,6 +15,15 @@ Este arquivo registra somente fatos comprováveis no repositório. A presença d
 - confrontantes mantidos em modo estritamente documental, sem exibir dados técnicos não extraídos;
 - testes automatizados e build aprovados; importação manual do PDF real ainda pendente.
 
+## Peças cartoriais do Averbação GEO — 12/08/2026
+
+- criado contexto documental rastreável, com valor, origem, confirmação e data de alteração;
+- habilitados previews do Requerimento, Memorial SIGEF original, Quadro de Coordenadas, Quadro de Confrontantes e Checklist;
+- adicionados editor do Requerimento, restauração do modelo e impressão A4 pelo navegador;
+- adicionada área de confirmação manual dos dados das peças e complementação não destrutiva dos confrontantes;
+- preparado contrato para DOCX sem implementar geração definitiva;
+- Planta, Declaração de Limites e Cartas de Anuência permanecem explicitamente em preparação/próxima etapa.
+
 ## Estado atual documentado
 
 ### V74.1.3

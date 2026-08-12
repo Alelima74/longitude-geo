@@ -19,6 +19,8 @@ export function createGeoRegistryProject(source = {}) {
     geometrySource: source.geometrySource || "",
     calculated: source.calculated || {},
     manualOverrides: source.manualOverrides || {},
+    cartorialData: source.cartorialData || {},
+    documentEdits: source.documentEdits || {},
     sourceDocuments: source.sourceDocuments || [],
     validation: source.validation || {},
     generatedDocuments: source.generatedDocuments || [],
@@ -30,12 +32,10 @@ export function createGeoRegistryProject(source = {}) {
 
 export function defaultChecklist() {
   return [
-    ["SIGEF", "Certificação"], ["SIGEF", "Memorial"], ["SIGEF", "Planta"],
-    ["Registro", "Matrícula atualizada"], ["Cadastro rural", "CCIR"],
-    ["Cadastro rural", "ITR/CIB"],
-    ["Responsabilidade técnica", "ART/TRT"], ["Peças", "Requerimento"],
-    ["Peças", "Planta"], ["Peças", "Memorial"], ["Peças", "Quadro de coordenadas"],
-  ].map(([category, label]) => ({ id: `${category}-${label}`, category, label, status: "pending" }));
+    ["REGISTRO", "Matrícula atualizada"], ["SIGEF", "Certificação SIGEF"], ["SIGEF", "Memorial Descritivo"], ["SIGEF", "Planta"],
+    ["CADASTRO RURAL", "CCIR"], ["CADASTRO RURAL", "ITR / CIB"], ["CADASTRO RURAL", "CAR"], ["RESPONSABILIDADE TÉCNICA", "ART/TRT"],
+    ["PEÇAS", "Requerimento de Averbação"], ["PEÇAS", "Memorial"], ["PEÇAS", "Planta"], ["PEÇAS", "Quadro de Coordenadas"], ["PEÇAS", "Quadro de Confrontantes"], ["PEÇAS", "Declarações"], ["PEÇAS", "Anuências, quando aplicáveis"],
+  ].map(([category, label]) => ({ id: `${category}-${label}`, category, label, status: "pending", observation: "" }));
 }
 
 export function projectProgress(project) {

@@ -10,6 +10,10 @@ import { assessNativeText, chooseRegistryText } from "../src/modules/geoRegistry
 import { validateGeometry, verticesToFeature } from "../src/modules/geoRegistry/geometryValidationService.mjs";
 import { applyMemorialData, applyRegistryData } from "../src/modules/geoRegistry/projectSourceState.mjs";
 import { parseSigefSegmentRows } from "../src/modules/geoRegistry/sigefLayoutParser.mjs";
+import { buildCartorialDocumentContext } from "../src/modules/geoRegistry/documents/builders/cartorialDocumentContext.mjs";
+import { validateDocumentData } from "../src/modules/geoRegistry/documents/validators/documentValidators.mjs";
+import { applyBoundarySupplement } from "../src/modules/geoRegistry/documents/builders/boundarySupplement.mjs";
+import { updateChecklistItem } from "../src/modules/geoRegistry/documents/builders/checklistState.mjs";
 
 const validText = `MEMORIAL DESCRITIVO
 Denominação: FAZENDA TESTE ANÔNIMA
@@ -356,3 +360,26 @@ test("propõe campos registrais por contexto e mantém validação separada", ()
   const parsed = parseRegistryDocument("MATRÍCULA Nº 103.328\nCNS: 06.344-6\nSERVENTIA: 1º REGISTRO DE IMÓVEIS\nCOMARCA: Várzea Grande\nMUNICÍPIO: Nossa Senhora do Livramento / MT\nPROPRIETÁRIA: MARCIA BERNARDES DA CUNHA\nÁREA: 11,1578 ha");
   assert.equal(parsed.fields.registrationNumber, "103.328"); assert.equal(parsed.fields.cns, "06.344-6"); assert.equal(parsed.fields.district, "Várzea Grande"); assert.equal(parsed.fields.municipality, "Nossa Senhora do Livramento"); assert.equal(parsed.fields.state, "MT"); assert.equal(parsed.fields.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(parsed.fieldValidation.registrationNumber.status, "CONFERIR");
 });
+
+function cartorialProject() {
+  return {
+    property: { name: "CHACARA CANAA", municipality: "Nossa Senhora do Livramento", state: "MT", area: 11.1578, perimeter: 1392.9 },
+    memorial: { registry: { owner: "MARCIA BERNARDES DA CUNHA", registrationNumber: "103328", cns: "06.344-6" } }, memorialRegistry: { owner: "MARCIA BERNARDES DA CUNHA", registrationNumber: "103328", cns: "06.344-6" },
+    registry: { confirmed: true, registrationNumber: "103.328", cns: "06.344-6", registryOffice: "1º Registro de Imóveis", district: "Nossa Senhora do Livramento", municipality: "Nossa Senhora do Livramento", state: "MT", owner: "MARCIA BERNARDES DA CUNHA", ownerDocument: "000.000.000-00", previousArea: 11.15 },
+    registryState: "CONFIRMED", sigef: { certificationId: "UUID-CANAA", certificationDate: "01/08/2026", surveyor: "ALEXANDRE MAGNO GOMES DE LIMA", accreditationCode: "G61" }, geodesy: { datum: "SIRGAS 2000" },
+    vertices: [
+      { code: "G61-M-3063", longitudeDocument: `56°29'41,396" W`, latitudeDocument: `15°42'09,314" S`, longitudeDecimal: -56.49, latitudeDecimal: -15.7, altitude: 251.8 },
+      { code: "G61-M-3064", longitudeDocument: `56°29'42,000" W`, latitudeDocument: `15°42'10,000" S`, longitudeDecimal: -56.5, latitudeDecimal: -15.71, altitude: 252.1 },
+    ],
+    boundaries: Array.from({ length: 5 }, (_, index) => ({ origin: "MEMORIAL", fromVertex: `G61-M-${3063 + index}`, toVertex: `G61-M-${index === 4 ? 3063 : 3064 + index}`, azimuthDocumentRaw: `${index + 10}°00'`, azimuthCalculated: 999, distanceDocumentRaw: `${100 + index},50`, distanceDocumentMeters: 100 + index + .5, distanceCalculated: 999, boundaryName: `CONFRONTANTE ${index + 1}`, boundaryRegistration: index === 3 ? null : "3959", boundaryCns: index === 3 ? null : "06.344-6" })),
+    checklist: [{ id: "registro-matricula", category: "REGISTRO", label: "Matrícula atualizada", status: "pending", observation: "" }], cartorialData: { "owner.civilStatus": { value: "casada", confirmed: true }, "owner.nationality": { value: "brasileira", confirmed: true }, "owner.profession": { value: "produtora rural", confirmed: true }, "owner.address": { value: "Nossa Senhora do Livramento/MT", confirmed: true } }, dataOrigins: {}, sourceDocuments: [{ category: "SIGEF", type: "Memorial", name: "memorial.pdf" }], geometry: { type: "Feature" }, manualOverrides: {},
+  };
+}
+
+test("requerimento completo fica pronto para revisão", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.equal(pieces.request.state, "PRONTO PARA REVISÃO"); assert.equal(pieces.request.validation.ready, true); assert.match(pieces.request.templateOriginal, /AO ILUSTRÍSSIMO SENHOR OFICIAL/); });
+test("requerimento informa exatamente os campos pendentes", () => { const project = cartorialProject(); project.registry.registryOffice = ""; const pieces = buildCartorialPieces(project); assert.equal(pieces.request.state, "DADOS PENDENTES"); assert.ok(pieces.request.validation.missingFields.includes("registryOffice")); assert.match(pieces.request.templateOriginal, /\[DADO PENDENTE\]/); });
+test("quadro de coordenadas preserva DMS e ordem original", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.deepEqual(pieces.coordinates.rows.map((item) => item.code), ["G61-M-3063", "G61-M-3064"]); assert.equal(pieces.coordinates.rows[0].longitude, `56°29'41,396" W`); assert.equal(pieces.coordinates.rows[0].latitude, `15°42'09,314" S`); });
+test("quadro de confrontantes usa cinco valores documentais antes dos calculados", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.equal(pieces.boundaries.rows.length, 5); assert.equal(pieces.boundaries.rows[0].azimuth, "10°00'"); assert.equal(pieces.boundaries.rows[0].distance, "100,50"); assert.notEqual(pieces.boundaries.rows[0].azimuth, "999"); });
+test("edição manual de confrontante não destrói valor original", () => { const original = cartorialProject().boundaries[0]; const edited = applyBoundarySupplement(original, { boundaryName: "EDITADO", owner: "VIZINHO" }); assert.equal(edited.originalData.boundaryName, "CONFRONTANTE 1"); assert.equal(edited.boundaryName, "CONFRONTANTE 1"); assert.equal(edited.additionalData.boundaryName, "EDITADO"); const context = buildCartorialDocumentContext({ ...cartorialProject(), boundaries: [edited] }); assert.equal(context.boundaries[0].originalData.boundaryName, "CONFRONTANTE 1"); });
+test("documento SIGEF independente não é bloqueado por matrícula", () => { const project = cartorialProject(); project.registry = { confirmed: false }; project.registryState = "NOT_IMPORTED"; const context = buildCartorialDocumentContext(project); assert.equal(validateDocumentData("coordinates", context).ready, true); assert.equal(validateDocumentData("boundaries", context).ready, true); });
+test("checklist permanece editável e preserva observação", () => { const project = cartorialProject(); project.checklist = updateChecklistItem(project.checklist, "registro-matricula", { status: "received", observation: "Certidão de 30 dias" }); const pieces = buildCartorialPieces(project); assert.equal(pieces.checklist.state, "PRONTO"); assert.equal(pieces.checklist.rows[0].status, "received"); assert.equal(pieces.checklist.rows[0].observation, "Certidão de 30 dias"); });

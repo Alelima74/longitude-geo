@@ -1,0 +1,3 @@
+export const pending = (field) => field?.value === "" || field?.value == null ? "[DADO PENDENTE]" : field.value;
+export const formatNumberBR = (field, digits = 4) => field?.value === "" || field?.value == null || !Number.isFinite(Number(field.value)) ? "[DADO PENDENTE]" : Number(field.value).toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+export function ownerQualification(owner) { return [owner.document?.value && `CPF/CNPJ ${owner.document.value}`, owner.nationality?.value, owner.civilStatus?.value, owner.profession?.value, owner.address?.value && `residente e domiciliado(a) em ${owner.address.value}`].filter(Boolean).join(", "); }
