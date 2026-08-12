@@ -9,6 +9,7 @@ export function createGeoRegistryProject(source = {}) {
     property: { name: "", municipality: "", state: "", area: null, perimeter: null, ...source.property },
     memorial: source.memorial || { property: {}, registry: {}, sigef: {}, geodesy: {} },
     registry: { registrationNumber: "", cns: "", registryOffice: "", district: "", municipality: "", state: "", propertyName: "", owner: "", ownerDocument: "", previousArea: null, incraCode: "", ccir: "", nirfCib: "", car: "", acts: [], confirmed: false, ...source.registry },
+    registryState: source.registryState || (source.registry?.confirmed ? "CONFIRMED" : "NOT_IMPORTED"),
     memorialRegistry: source.memorialRegistry || {},
     sigef: { certificationId: "", parcelId: "", certificationDate: "", status: "", surveyor: "", accreditationCode: "", ...source.sigef },
     geodesy: { datum: "", coordinateSystem: "", utmZone: "", centralMeridian: "", ...source.geodesy },

@@ -9,6 +9,7 @@ import { parseRegistryDocument } from "../src/modules/geoRegistry/registryDocume
 import { assessNativeText, chooseRegistryText } from "../src/modules/geoRegistry/registryOcrPolicy.mjs";
 import { validateGeometry, verticesToFeature } from "../src/modules/geoRegistry/geometryValidationService.mjs";
 import { applyMemorialData, applyRegistryData } from "../src/modules/geoRegistry/projectSourceState.mjs";
+import { parseSigefSegmentRows } from "../src/modules/geoRegistry/sigefLayoutParser.mjs";
 
 const validText = `MEMORIAL DESCRITIVO
 Denominação: FAZENDA TESTE ANÔNIMA
@@ -32,7 +33,7 @@ CNS: 06.344-6
 Município/UF: Nossa Senhora do Livramento-MT
 Área: 11,1578 ha
 Perímetro: 1.392,9 m
-Certificação: 81bacc4a-978b-441c-a810-8697046229d0
+Certificação: 81bacc4a-9788b-441c-a810-8697046229d0
 Responsável Técnico(a): ALEXANDRE MAGNO GOMES DE LIMA
 Código de credenciamento: G61
 Sistema Geodésico de referência: SIRGAS 2000
@@ -307,9 +308,51 @@ test("confrontante manual permanece separado do documental e pode alimentar quad
 
 test("regressão permanente CHACARA CANAA preserva todos os campos e cinco vértices", () => {
   const result = parseSigefMemorialText(chacaraCanaaText);
-  assert.equal(result.data.property.name, "CHACARA CANAA"); assert.equal(result.data.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(result.data.registry.registrationNumber, "103328"); assert.equal(result.data.registry.cns, "06.344-6"); assert.equal(result.data.property.municipality, "Nossa Senhora do Livramento"); assert.equal(result.data.property.area, 11.1578); assert.equal(result.data.property.perimeter, 1392.9); assert.equal(result.data.sigef.certificationId, "81bacc4a-978b-441c-a810-8697046229d0"); assert.equal(result.data.sigef.surveyor, "ALEXANDRE MAGNO GOMES DE LIMA"); assert.equal(result.data.sigef.accreditationCode, "G61"); assert.equal(result.data.geodesy.datum, "SIRGAS 2000"); assert.deepEqual(result.data.vertices.map((item) => item.code), ["G61-M-3063", "G61-M-3064", "G61-M-3065", "G61-M-3066", "G61-M-3067"]); assert.ok(result.data.vertices.every((item) => item.latitudeDocument && item.longitudeDocument && Number.isFinite(item.latitudeDecimal) && Number.isFinite(item.longitudeDecimal))); assert.ok(verticesToFeature(result.data.vertices));
+  assert.equal(result.data.property.name, "CHACARA CANAA"); assert.equal(result.data.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(result.data.registry.registrationNumber, "103328"); assert.equal(result.data.registry.cns, "06.344-6"); assert.equal(result.data.property.municipality, "Nossa Senhora do Livramento"); assert.equal(result.data.property.state, "MT"); assert.equal(result.data.property.area, 11.1578); assert.equal(result.data.property.perimeter, 1392.9); assert.equal(result.data.sigef.certificationId, "81bacc4a-9788b-441c-a810-8697046229d0"); assert.equal(result.data.sigef.surveyor, "ALEXANDRE MAGNO GOMES DE LIMA"); assert.equal(result.data.sigef.accreditationCode, "G61"); assert.equal(result.data.geodesy.datum, "SIRGAS 2000"); assert.deepEqual(result.data.vertices.map((item) => item.code), ["G61-M-3063", "G61-M-3064", "G61-M-3065", "G61-M-3066", "G61-M-3067"]); assert.ok(result.data.vertices.every((item) => item.latitudeDocument && item.longitudeDocument && Number.isFinite(item.latitudeDecimal) && Number.isFinite(item.longitudeDecimal))); assert.ok(verticesToFeature(result.data.vertices));
 });
 
 test("dados registrais não sobrescrevem Memorial, SIGEF, geometria ou vértices", () => {
-  const parsed = parseSigefMemorialText(chacaraCanaaText).data; const geometry = verticesToFeature(parsed.vertices); const initial = { property: {}, registry: {}, sigef: {}, geodesy: {}, vertices: [], boundaries: [], geometry, calculated: { area: 11.1578 } }; const withMemorial = applyMemorialData(initial, parsed); const withRegistry = applyRegistryData(withMemorial, { registrationNumber: "REG-999", owner: "OUTRO TITULAR", confirmed: true }); assert.equal(withRegistry.memorial.registry.registrationNumber, "103328"); assert.equal(withRegistry.memorial.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(withRegistry.sigef.certificationId, "81bacc4a-978b-441c-a810-8697046229d0"); assert.equal(withRegistry.vertices.length, 5); assert.equal(withRegistry.geometry, geometry); assert.deepEqual(withRegistry.calculated, { area: 11.1578 });
+  const parsed = parseSigefMemorialText(chacaraCanaaText).data; const geometry = verticesToFeature(parsed.vertices); const initial = { property: {}, registry: {}, sigef: {}, geodesy: {}, vertices: [], boundaries: [], geometry, calculated: { area: 11.1578 } }; const withMemorial = applyMemorialData(initial, parsed); const withRegistry = applyRegistryData(withMemorial, { registrationNumber: "REG-999", owner: "OUTRO TITULAR", confirmed: true }); assert.equal(withRegistry.memorial.registry.registrationNumber, "103328"); assert.equal(withRegistry.memorial.registry.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(withRegistry.sigef.certificationId, "81bacc4a-9788b-441c-a810-8697046229d0"); assert.equal(withRegistry.vertices.length, 5); assert.equal(withRegistry.geometry, geometry); assert.deepEqual(withRegistry.calculated, { area: 11.1578 });
+});
+
+test("interpreta literalmente os cinco segmentos reais da CHACARA CANAA por linha", () => {
+  const lines = [
+    "G61-M-3063 ... G61-M-3064 153°58' 248,72 CNS: 06.344-6 | Mat. 3959 | FAZENDA PARAISO INCRA ...",
+    "G61-M-3064 ... G61-M-3065 239°03' 165,58 CNS: 06.344-6 | Mat. 3959 | SITIO CANINANA e propriedade de ESPOLIO DE ANA EV...",
+    "G61-M-3065 ... G61-M-3066 242°23' 283,92 CNS: 06.344-6 | Mat. 3959 | SITIO CANINANA e propriedade de ESPOLIO DE ANA EV...",
+    "G61-M-3066 ... G61-M-3067 332°36' 239,09 Estrada de Servidão",
+    "G61-M-3067 ... G61-M-3063 59°58' 455,59 CNS: 06.344-6 | Mat. POSS; | CHACARA 2 IRMAOS e propriedade de MAURO ANTONIO ...",
+  ];
+  const segments = parseSigefSegmentRows(lines);
+  assert.equal(segments.length, 5);
+  assert.deepEqual(segments.map((item) => [item.fromVertex, item.toVertex]), [["G61-M-3063", "G61-M-3064"], ["G61-M-3064", "G61-M-3065"], ["G61-M-3065", "G61-M-3066"], ["G61-M-3066", "G61-M-3067"], ["G61-M-3067", "G61-M-3063"]]);
+  assert.deepEqual(segments.map((item) => item.azimuthDocumentRaw), ["153°58'", "239°03'", "242°23'", "332°36'", "59°58'"]);
+  assert.deepEqual(segments.map((item) => item.distanceDocumentRaw), ["248,72", "165,58", "283,92", "239,09", "455,59"]);
+  assert.deepEqual(segments.map((item) => item.distanceDocumentMeters), [248.72, 165.58, 283.92, 239.09, 455.59]);
+  assert.equal(segments[0].boundaryCns, "06.344-6"); assert.equal(segments[0].boundaryRegistration, "3959"); assert.match(segments[0].boundaryName, /FAZENDA PARAISO/);
+  assert.equal(segments[3].boundaryCns, null); assert.equal(segments[3].boundaryRegistration, null); assert.equal(segments[3].boundaryName, "Estrada de Servidão");
+  assert.equal(segments[4].boundaryRegistration, "POSS;"); assert.match(segments[4].boundaryName, /CHACARA 2 IRMAOS/);
+});
+
+test("rejeita matrícula OCR sem contexto semântico suficiente", () => {
+  const parsed = parseRegistryDocument("MATRÍCULA 1\nOCR ilegível");
+  assert.equal(parsed.fields.registrationNumber, "");
+  assert.equal(parsed.fieldValidation.registrationNumber.status, "REJEITADO");
+});
+
+test("integra os cinco segmentos documentais ao Memorial sem alterar os vértices", () => {
+  const segmentText = [
+    "G61-M-3063 ... G61-M-3064 153°58' 248,72 CNS: 06.344-6 | Mat. 3959 | FAZENDA PARAISO INCRA ...",
+    "G61-M-3064 ... G61-M-3065 239°03' 165,58 CNS: 06.344-6 | Mat. 3959 | SITIO CANINANA e propriedade de ESPOLIO DE ANA EV...",
+    "G61-M-3065 ... G61-M-3066 242°23' 283,92 CNS: 06.344-6 | Mat. 3959 | SITIO CANINANA e propriedade de ESPOLIO DE ANA EV...",
+    "G61-M-3066 ... G61-M-3067 332°36' 239,09 Estrada de Servidão",
+    "G61-M-3067 ... G61-M-3063 59°58' 455,59 CNS: 06.344-6 | Mat. POSS; | CHACARA 2 IRMAOS e propriedade de MAURO ANTONIO ...",
+  ].join("\n");
+  const result = parseSigefMemorialText(`${chacaraCanaaText}\n${segmentText}`);
+  assert.equal(result.data.vertices.length, 5); assert.equal(result.data.boundaries.length, 5); assert.ok(result.data.boundaries.every((item) => item.origin === "MEMORIAL")); assert.ok(result.data.boundaries.every((item) => item.azimuthDocumentRaw && item.distanceDocumentRaw && item.boundaryName));
+});
+
+test("propõe campos registrais por contexto e mantém validação separada", () => {
+  const parsed = parseRegistryDocument("MATRÍCULA Nº 103.328\nCNS: 06.344-6\nSERVENTIA: 1º REGISTRO DE IMÓVEIS\nCOMARCA: Várzea Grande\nMUNICÍPIO: Nossa Senhora do Livramento / MT\nPROPRIETÁRIA: MARCIA BERNARDES DA CUNHA\nÁREA: 11,1578 ha");
+  assert.equal(parsed.fields.registrationNumber, "103.328"); assert.equal(parsed.fields.cns, "06.344-6"); assert.equal(parsed.fields.district, "Várzea Grande"); assert.equal(parsed.fields.municipality, "Nossa Senhora do Livramento"); assert.equal(parsed.fields.state, "MT"); assert.equal(parsed.fields.owner, "MARCIA BERNARDES DA CUNHA"); assert.equal(parsed.fieldValidation.registrationNumber.status, "CONFERIR");
 });

@@ -1,5 +1,34 @@
 const VERTEX = /\b[A-Z0-9]{2,10}-[MPV]-\d{2,10}\b/i;
 
+export function parseSigefSegmentRows(rawLines = []) {
+  const records = [];
+  for (const entry of rawLines) {
+    const raw = clean(typeof entry === "string" ? entry : entry?.text);
+    if (!raw) continue;
+    const codes = [...raw.matchAll(new RegExp(VERTEX.source, "gi"))];
+    if (codes.length < 2 || codes[0].index !== 0) continue;
+    const fromVertex = codes[0][0].toUpperCase();
+    const toVertex = codes[1][0].toUpperCase();
+    const tail = raw.slice(codes[1].index + codes[1][0].length).trim();
+    const technical = tail.match(/^(\d{1,3}\s*[°º]\s*\d{1,2}\s*['’′](?:\s*\d{1,2}(?:[.,]\d+)?\s*["”″])?)\s+(\d+(?:\.\d{3})*,\d+)\s*(?:m\b)?\s*(.*)$/i);
+    if (!technical) continue;
+    const azimuthDocumentRaw = clean(technical[1]).replace(/\s+/g, "");
+    const distanceDocumentRaw = technical[2];
+    const distanceDocumentMeters = numberBR(distanceDocumentRaw);
+    const remainder = clean(technical[3]).replace(/^[-|;:,\s]+/, "");
+    const boundaryCns = clean((remainder.match(/\bCNS\s*:\s*([\d.-]+)/i) || [])[1]) || null;
+    const boundaryRegistration = clean((remainder.match(/\bMat\.?(?:r[ií]cula)?\s*[:.]?\s*([^|]+?)(?=\s*\||$)/i) || [])[1]) || null;
+    const boundaryName = clean(remainder
+      .replace(/\bCNS\s*:\s*[\d.-]+\s*\|?/ig, "")
+      .replace(/\bMat\.?(?:r[ií]cula)?\s*[:.]?\s*[^|]+\|?/ig, "")
+      .replace(/^[-|;:,\s]+/, ""));
+    const parts = [...azimuthDocumentRaw.matchAll(/\d+(?:[.,]\d+)?/g)].map((item) => numberBR(item[0]));
+    const azimuthDocumentDegrees = parts[0] + (parts[1] || 0) / 60 + (parts[2] || 0) / 3600;
+    records.push({ fromVertex, toVertex, azimuthDocumentRaw, azimuthDocumentDegrees, distanceDocumentRaw, distanceDocumentMeters, azimuth: azimuthDocumentRaw, distance: distanceDocumentMeters, boundaryCns, boundaryRegistration, boundaryName, boundaryType: "", raw, origin: "MEMORIAL", status: "OK" });
+  }
+  return records;
+}
+
 export function reconstructPdfLines(items = []) {
   const lines = [];
   for (const item of items) {

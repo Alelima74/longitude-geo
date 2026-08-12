@@ -1,5 +1,5 @@
 import proj4 from "proj4";
-import { parseSigefSegmentTable } from "./sigefLayoutParser.mjs";
+import { parseSigefSegmentRows, parseSigefSegmentTable } from "./sigefLayoutParser.mjs";
 
 const clean = (value = "") => String(value).replace(/[\t ]+/g, " ").trim();
 const normalizeText = (value = "") => String(value).replace(/\u0000/g, "").replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").replace(/ *\n */g, "\n").trim();
@@ -80,7 +80,7 @@ export function parseSigefMemorialText(rawText, layout = {}) {
   };
   const coordinateResult = parseVertices(text, parsed.geodesy);
   const validCode = new RegExp(`^${SIGEF_VERTEX_CODE}$`, "i");
-  const extractedSegments = [...parseSigefSegmentTable(layout.items, layout.lines), ...parseStrictSegments(text)]
+  const extractedSegments = [...parseSigefSegmentRows(layout.lines?.length ? layout.lines : text.split("\n")), ...parseSigefSegmentTable(layout.items, layout.lines), ...parseStrictSegments(text)]
     .filter((item) => validCode.test(item.fromVertex) && validCode.test(item.toVertex))
     .filter((item, index, all) => all.findIndex((candidate) => candidate.fromVertex === item.fromVertex && candidate.toVertex === item.toVertex) === index);
   const rawSegmentStructure = extractRawSegmentStructure(text, coordinateResult.vertices);
@@ -157,7 +157,7 @@ function buildOrderedSegments(vertices, extracted, text) {
   return valid.map((item, index) => {
     const next = valid[(index + 1) % valid.length];
     const found = extracted.find((segment) => segment.fromVertex === item.code && segment.toVertex === next.code);
-    if (found) return { ...found, origin: "MEMORIAL", azimuthDocument: found.azimuth, distanceDocument: found.distance };
+    if (found) return { ...found, origin: "MEMORIAL", azimuthDocument: found.azimuthDocumentRaw || found.azimuth, distanceDocument: found.distanceDocumentMeters ?? found.distance };
     const boundaryName = boundaryForPair(text, item.code, next.code);
     return { fromVertex: item.code, toVertex: next.code, azimuth: null, distance: null, azimuthDocument: null, distanceDocument: null, boundaryName, boundaryType: "", raw: "", origin: "RECONSTRUÍDO", status: boundaryName ? "incompleto" : "segmento reconstruído; dados técnicos não identificados" };
   });
