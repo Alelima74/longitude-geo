@@ -1,5 +1,7 @@
 # Longitude Geo V70 — Consulta Territorial Cloud
 
+> **Documento histórico da V70.** Não use este arquivo como confirmação do estado atual ou como ordem para reaplicar SQL. Consulte [CURRENT_STATE.md](CURRENT_STATE.md), [docs/database/DATABASE.md](docs/database/DATABASE.md) e [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Implementado
 - Consulta por UTM.
 - Consulta por coordenada geográfica em decimal ou GMS.

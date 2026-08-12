@@ -1,5 +1,7 @@
 # Longitude Geo V69 Cloud — configuração prática
 
+> **Guia histórico.** Não execute os scripts deste guia sem conferir o banco remoto e [docs/database/DATABASE.md](docs/database/DATABASE.md). O procedimento atual está em [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## 1. Criar o Supabase
 1. Crie um projeto no Supabase.
 2. Abra **SQL Editor** e execute `supabase/01_setup_cloud.sql`.

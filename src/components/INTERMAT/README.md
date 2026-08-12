@@ -1,3 +1,5 @@
 # INTERMAT
 
 Módulo reservado para títulos primitivos, PROP_REQUERC e nome de fazenda.
+
+> Este diretório é uma reserva arquitetural; a implementação atual permanece principalmente em `src/legacy/LegacyWorkspace.jsx`. Consulte o [inventário canônico de módulos](../../../docs/modules/MODULES.md).

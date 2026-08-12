@@ -12,6 +12,7 @@ import { criarAssinaturaArquivo, gravarBaseSigef, lerBaseSigef, apagarBaseSigef,
 import CloudPanel from "../cloud/CloudPanel";
 import EnterpriseModules from "../components/EnterpriseModules";
 import TechnicalPiecesModule from "../modules/technicalPieces/TechnicalPiecesModule";
+import GeoRegistryModule from "../modules/geoRegistry/GeoRegistryModule";
 import {
   AlignmentType,
   Document,
@@ -5166,6 +5167,7 @@ R$ ${propostaForm.valor || "A definir"}`;
           <button className={tela === "integracoes" ? "active" : ""} onClick={() => setTela("integracoes")}>📍 SIGEF / CAR / INTERMAT</button>
           <button className={tela === "cloud" ? "active" : ""} onClick={() => setTela("cloud")}>⭐ Cloud / Consulta Territorial</button>
           <button className={tela === "pecas" ? "active" : ""} onClick={() => setTela("pecas")}>🧾 Peças Técnicas</button>
+          <button className={tela === "averbacaoGeo" ? "active" : ""} onClick={() => setTela("averbacaoGeo")}>📐 Averbação GEO</button>
           <button className={tela === "relatorios" ? "active" : ""} onClick={() => setTela("relatorios")}>📑 Relatórios</button>
           <button className={tela === "propostas" ? "active" : ""} onClick={() => setTela("propostas")}>💰 Propostas</button>
           <button className={tela === "config" ? "active" : ""} onClick={() => setTela("config")}>⚙️ Configurações</button>
@@ -5200,6 +5202,8 @@ R$ ${propostaForm.valor || "A definir"}`;
         )}
 
         {tela === "pecas" && <TechnicalPiecesModule />}
+
+        {tela === "averbacaoGeo" && <GeoRegistryModule />}
 
         {tela === "dashboard_legacy" && (
           <section className="page">
@@ -5700,6 +5704,7 @@ function tituloTela(tela) {
     integracoes: "SIGEF / CAR / INTERMAT",
     cloud: "Cloud / Consulta Territorial",
     pecas: "Peças Técnicas Inteligentes",
+    averbacaoGeo: "Averbação de Georreferenciamento",
     relatorios: "Relatórios",
     propostas: "Propostas",
     config: "Configurações",

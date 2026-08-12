@@ -1,5 +1,7 @@
 # Passos obrigatórios da V70
 
+> **Guia histórico da V70.** Não representa o fluxo oficial atual e não autoriza reaplicar migrations. Consulte [.codex/WORKFLOW.md](.codex/WORKFLOW.md), [docs/database/DATABASE.md](docs/database/DATABASE.md) e [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 1. Extrair esta pasta.
 2. Executar `ATUALIZAR_V70_INTELIGENCIA.bat`.
 3. Abrir o Supabase > SQL Editor > New query.

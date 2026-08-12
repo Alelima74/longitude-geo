@@ -1,5 +1,7 @@
 # Longitude Geo V69.1 — Cloud Importer
 
+> **Guia histórico.** Não reaplique scripts SQL com base apenas neste arquivo. Consulte [docs/database/DATABASE.md](docs/database/DATABASE.md) e [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Ordem obrigatória
 
 1. No Supabase SQL Editor, execute `supabase/02_cloud_importer_admin.sql`.

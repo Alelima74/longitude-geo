@@ -1,5 +1,7 @@
 # Longitude Geo V69.2 — Refatoração modular, etapa 1
 
+> **Documento histórico.** A arquitetura canônica está em [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md).
+
 ## Alteração principal
 
 O arquivo raiz `src/App.jsx` deixou de concentrar milhares de linhas. Agora ele apenas inicializa a aplicação por meio de `src/app/AppRoot.jsx`.
