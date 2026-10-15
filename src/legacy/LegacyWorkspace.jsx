@@ -12,7 +12,12 @@ import { criarAssinaturaArquivo, gravarBaseSigef, lerBaseSigef, apagarBaseSigef,
 import CloudPanel from "../cloud/CloudPanel";
 import EnterpriseModules from "../components/EnterpriseModules";
 import TechnicalPiecesModule from "../modules/technicalPieces/TechnicalPiecesModule";
+import EvaluationModule from "../modules/evaluations/EvaluationModule";
 import GeoRegistryModule from "../modules/geoRegistry/GeoRegistryModule";
+import { LongitudeHeader, LongitudeSidebar } from "../components/LongitudeShell";
+import LongitudeDashboard from "../components/LongitudeDashboard";
+import { useWorkspaceData } from '../data/online/useWorkspaceData.js';
+import { downloadWorkspaceCopy } from '../data/online/downloadWorkspaceCopy.js';
 import {
   AlignmentType,
   Document,
@@ -619,8 +624,9 @@ export default function LegacyWorkspace() {
   const drawnItemsRef = useRef(null);
 
   const [tela, setTela] = useState("analise");
+  const [geoSectionRequest, setGeoSectionRequest] = useState("Visão Geral");
   const [imovelAbertoId, setImovelAbertoId] = useState("");
-  const [dados, setDados] = useState(carregarDados);
+  const [dados, setDados, workspaceSync] = useWorkspaceData(carregarDados, initialData);
   const [areaHa, setAreaHa] = useState(null);
   const [arquivoNome, setArquivoNome] = useState("");
   const [geojsonAtual, setGeojsonAtual] = useState(null);
@@ -677,7 +683,7 @@ export default function LegacyWorkspace() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
+    if (!workspaceSync.online) localStorage.setItem(STORAGE_KEY, JSON.stringify(dados));
   }, [dados]);
 
   useEffect(() => {
@@ -791,7 +797,7 @@ export default function LegacyWorkspace() {
     }
 
     setTimeout(() => map.invalidateSize(), 150);
-  }, [tela]);
+  }, [tela, workspaceSync.ready]);
 
   const estatisticas = useMemo(() => {
     const totalArea = dados.analises.reduce((soma, a) => soma + Number(a.areaHa || 0), 0);
@@ -4861,7 +4867,7 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
     const novo = { id: uid(), criadoEm: hojeBR(), ...clienteForm };
     setDados((d) => ({ ...d, clientes: [novo, ...d.clientes] }));
     setClienteForm({ nome: "", documento: "", telefone: "", email: "" });
-    alert("Cliente salvo.");
+    alert(workspaceSync.online ? 'Cliente preparado na base de trabalho. Clique em Salvar base de trabalho na nuvem para enviar.' : 'Cliente salvo.');
   }
 
   function salvarImovelEAnalise(e) {
@@ -4893,7 +4899,7 @@ Este cálculo é preliminar e depende da qualidade da geometria consultada e do 
 
     setDados((d) => ({ ...d, imoveis: [imovel, ...d.imoveis], analises: [analise, ...d.analises] }));
     setDiagnostico("Análise salva no histórico. Próxima etapa: gerar relatório ou proposta.");
-    alert("Imóvel e análise salvos.");
+    alert(workspaceSync.online ? 'Imóvel e análise preparados. Clique em Salvar base de trabalho na nuvem para enviar.' : 'Imóvel e análise salvos.');
   }
 
   function baixarRelatorio(analise = null) {
@@ -5127,83 +5133,41 @@ R$ ${propostaForm.valor || "A definir"}`;
   }
 
   function limparBase() {
+    if (workspaceSync.online) {
+      if (!confirm('Limpar somente a cópia local antiga deste navegador? A base carregada da nuvem será preservada.')) return;
+      localStorage.removeItem(STORAGE_KEY); alert('Cópia local antiga removida. Dados da nuvem preservados.'); return;
+    }
     if (!confirm("Tem certeza que deseja apagar todos os dados salvos neste navegador?")) return;
     setDados(initialData);
     localStorage.removeItem(STORAGE_KEY);
     alert("Base local apagada.");
   }
 
+  const navigateLongitude = (target, geoSection = "Visão Geral") => {
+    setGeoSectionRequest(geoSection);
+    setTela(target);
+  };
+
+  if (!workspaceSync.ready) return <main className="workspace-login"><h1>Carregando sua base de trabalho</h1><p role="status">{workspaceSync.message || 'Consultando a nuvem...'}</p><button disabled={workspaceSync.busy} onClick={workspaceSync.reload}>Tentar novamente</button></main>;
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brand-logo" src={logoLongitude} alt="Longitude Assessoria Rural e Urbano" />
-          <div>
-            <div className="brand-title-row">
-              <h1>{APP_NAME}</h1>
-              <span className="app-version-badge" title={`Build ${APP_BUILD}`}>{APP_VERSION}</span>
-            </div>
-            <p>Regularização Fundiária • SIGEF • CAR • INTERMAT</p>
-          </div>
-        </div>
-
-        <nav className="nav">
-          <button className={tela === "dashboard" ? "active" : ""} onClick={() => setTela("dashboard")}>🏠 Dashboard</button>
-
-              <label className="file-button secondary-action">
-                Importar ZIPs SIGEF Brasil
-                <input
-                  type="file"
-                  accept=".zip"
-                  multiple
-                  onChange={importarSigefZipNacional}
-                  hidden
-                />
-              </label>
-
-          <button className={tela === "analise" ? "active" : ""} onClick={() => setTela("analise")}>🗺️ Análise Territorial</button>
-          <button className={tela === "clientes" ? "active" : ""} onClick={() => setTela("clientes")}>👤 Clientes</button>
-          <button className={tela === "imoveis" ? "active" : ""} onClick={() => setTela("imoveis")}>🏡 Imóveis</button>
-          <button className={tela === "integracoes" ? "active" : ""} onClick={() => setTela("integracoes")}>📍 SIGEF / CAR / INTERMAT</button>
-          <button className={tela === "cloud" ? "active" : ""} onClick={() => setTela("cloud")}>⭐ Cloud / Consulta Territorial</button>
-          <button className={tela === "pecas" ? "active" : ""} onClick={() => setTela("pecas")}>🧾 Peças Técnicas</button>
-          <button className={tela === "averbacaoGeo" ? "active" : ""} onClick={() => setTela("averbacaoGeo")}>📐 Averbação GEO</button>
-          <button className={tela === "relatorios" ? "active" : ""} onClick={() => setTela("relatorios")}>📑 Relatórios</button>
-          <button className={tela === "propostas" ? "active" : ""} onClick={() => setTela("propostas")}>💰 Propostas</button>
-          <button className={tela === "config" ? "active" : ""} onClick={() => setTela("config")}>⚙️ Configurações</button>
-        </nav>
-
-        <div className="upload-card">
-          <h2>Nova análise</h2>
-          <p>Envie um KML/GeoJSON ou desenhe no mapa para calcular área e montar o diagnóstico inicial.</p>
-          <label className="upload-button">
-            Selecionar KML
-            <input type="file" accept=".kml" onChange={carregarKML} />
-          </label>
-          <label className="secondary-upload-button">
-            Importar GeoJSON
-            <input type="file" accept=".geojson,.json" onChange={importarGeoJSON} />
-          </label>
-          {arquivoNome && <small>Arquivo: {arquivoNome}</small>}
-        </div>
-      </aside>
+      <LongitudeSidebar active={tela} onNavigate={navigateLongitude} />
 
       <main className="main">
-        <header className="topbar">
-          <div>
-            <h2>{tituloTela(tela)}</h2>
-            <p>Plataforma de Inteligência Fundiária e Regularização Territorial</p>
-          </div>
-          {["analise", "integracoes", "cloud"].includes(tela) && <button className="report-button" onClick={() => baixarRelatorio()}>Gerar relatório</button>}
-        </header>
+        <LongitudeHeader active={tela} action={["analise", "integracoes", "cloud"].includes(tela) ? "Gerar relatório" : ""} onAction={() => baixarRelatorio()} />
+        {workspaceSync.online && <div className="workspace-sync"><span role="status">{workspaceSync.dirty ? 'Base de trabalho com alterações ainda não enviadas. ' : ''}{workspaceSync.message}</span><button onClick={() => downloadWorkspaceCopy({data:dados}, "workspace")}>Baixar cópia da base de trabalho</button><button disabled={workspaceSync.busy || !workspaceSync.dirty} onClick={workspaceSync.save}>Salvar base de trabalho na nuvem</button><button disabled={workspaceSync.busy} onClick={workspaceSync.reload}>Atualizar base de trabalho</button></div>}
 
-        {["dashboard", "clientes", "imoveis", "relatorios", "propostas", "config"].includes(tela) && (
+        {tela === "dashboard" && <LongitudeDashboard data={dados} stats={estatisticas} onNavigate={navigateLongitude} />}
+
+        {["clientes", "imoveis", "relatorios", "propostas", "config"].includes(tela) && (
           <EnterpriseModules module={tela} />
         )}
 
         {tela === "pecas" && <TechnicalPiecesModule />}
 
-        {tela === "averbacaoGeo" && <GeoRegistryModule />}
+        {tela === "evaluations" && <EvaluationModule data={dados} onNavigate={navigateLongitude} />}
+
+        {tela === "averbacaoGeo" && <GeoRegistryModule requestedSection={geoSectionRequest} />}
 
         {tela === "dashboard_legacy" && (
           <section className="page">
@@ -5684,7 +5648,7 @@ R$ ${propostaForm.valor || "A definir"}`;
           <section className="page">
             <div className="panel danger-panel">
               <h3>Configurações locais</h3>
-              <p className="muted">Nesta versão, os dados ficam salvos apenas neste navegador.</p>
+              <p className="muted">{workspaceSync.online ? 'A base de trabalho é enviada pelo botão Salvar base de trabalho na nuvem. Projetos e laudos têm seus próprios botões de salvamento.' : 'Nesta versão, os dados ficam salvos apenas neste navegador.'}</p>
               <button className="danger-button" onClick={limparBase}>Apagar base local</button>
             </div>
           </section>

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { clientDisplayName, filterClients, mergeClients } from "../src/core/clients/clientMapper.mjs";
 import { parseSigefMemorialText } from "../src/modules/geoRegistry/sigefMemorialParser.mjs";
 import { enrichCalculatedSegments } from "../src/modules/geoRegistry/segmentCalculations.mjs";
 import { findInLocalSigef } from "../src/modules/geoRegistry/localSigefSearch.mjs";
@@ -7,7 +8,9 @@ import { reconstructPdfLines } from "../src/modules/geoRegistry/sigefLayoutParse
 import { buildCartorialPieces } from "../src/modules/geoRegistry/cartorialPieces.mjs";
 import { parseRegistryDocument } from "../src/modules/geoRegistry/registryDocumentParser.mjs";
 import { assessNativeText, chooseRegistryText } from "../src/modules/geoRegistry/registryOcrPolicy.mjs";
-import { validateGeometry, verticesToFeature } from "../src/modules/geoRegistry/geometryValidationService.mjs";
+import { canonicalSurveyGeometry, validateGeometry, verticesToFeature } from "../src/modules/geoRegistry/geometryValidationService.mjs";
+import { createGeoRegistryProject } from "../src/modules/geoRegistry/geoRegistryModel.mjs";
+import { buildCanonicalSegments, buildCanonicalSurveyData, groupCanonicalBoundaries, segmentSelectionId } from "../src/modules/geoRegistry/canonical/canonicalSurveyData.mjs";
 import { applyMemorialData, applyRegistryData } from "../src/modules/geoRegistry/projectSourceState.mjs";
 import { parseSigefSegmentRows } from "../src/modules/geoRegistry/sigefLayoutParser.mjs";
 import { buildCartorialDocumentContext } from "../src/modules/geoRegistry/documents/builders/cartorialDocumentContext.mjs";
@@ -16,6 +19,24 @@ import { applyBoundarySupplement } from "../src/modules/geoRegistry/documents/bu
 import { updateChecklistItem } from "../src/modules/geoRegistry/documents/builders/checklistState.mjs";
 import { buildPerimeterNarrative } from "../src/modules/geoRegistry/documents/builders/perimeterNarrativeBuilder.mjs";
 import { buildBoundaryDocuments } from "../src/modules/geoRegistry/documents/builders/boundaryDocumentBuilder.mjs";
+
+test("Novo Laudo reúne clientes oficiais e CadCliente preservando identidade",()=>{const rows=mergeClients([{id:"op-1",name:"Alexandre Fantini",document:"301.752.000-00",phone:"1"}],[{id:"master-1",legacy_id:"207",legacy_source:"METRICA_TOPO_MDB",type:"PJ",corporate_name:"Empresa Rural Ltda",cpf_cnpj:"12.345.678/0001-90",city:"Cuiabá",state:"MT"}]);assert.equal(rows.length,2);const legacy=rows.find(x=>x.legacyId==="207");assert.equal(legacy.origin,"CadCliente / Métrica TOPO");assert.equal(clientDisplayName(legacy),"Empresa Rural Ltda — 12.345.678/0001-90");assert.equal(filterClients(rows,"301.752")[0].id,"op-1");assert.equal(filterClients(rows,"empresa")[0].id,"master-1")});
+import { confirmCartorialData } from "../src/modules/geoRegistry/documents/builders/cartorialDataPersistence.mjs";
+import { listProjectsFromStorage, saveProjectToStorage } from "../src/modules/geoRegistry/geoRegistryStorageCore.mjs";
+import { buildPlantLayout, generateLocationMap } from "../src/modules/geoRegistry/documents/plant/plantLayout.mjs";
+import { buildPlantDxf, CAD_LAYERS, DXF_VERSION, safeCadBaseName, validatePlantDxf } from "../src/modules/geoRegistry/documents/plant/plantCadExport.mjs";
+import { buildCanonicalGeometry, buildUniformPresentation, validateRigidTransform } from "../src/modules/geoRegistry/documents/plant/canonicalGeometry.mjs";
+import { readFileSync } from "node:fs";
+import { buildDossier, buildSpecialBoundaryReports, classifyBoundaryType, DOSSIER_DEFAULT_ORDER } from "../src/modules/geoRegistry/documents/builders/cartorialWorkflow.mjs";
+import { applyChecklistOverride, buildPendingRequirementsReport, calculateProtocolReadiness, createRegistryOfficeProfile, dossierItemsFromChecklist, evaluateBoundaryRequirements, evaluateCartorialChecklist, MATO_GROSSO_GEO_BASE } from "../src/modules/geoRegistry/documents/builders/cartorialChecklistEngine.mjs";
+import { priorityLabel, requirementLabel, sourceLabel, statusLabel } from "../src/modules/geoRegistry/i18n/ptBR.mjs";
+import { documentTextIssues } from "../src/modules/geoRegistry/documents/validators/documentQuality.mjs";
+import { buildNotificationBatch, eligibleBoundariesForNotification, notificationTemplate, validateBoundaryNotification } from "../src/modules/geoRegistry/documents/builders/boundaryNotification.mjs";
+import { notificationStatusLabel } from "../src/modules/geoRegistry/i18n/ptBR.mjs";
+import { buildImportSimulation } from "../src/legacy-import/simulation.mjs";
+import { METRICA_TOPO_PRESET, unmappedFields } from "../src/legacy-import/presets/metricaTopo.mjs";
+import { buildGeoProjectFromLegacyData, consolidateLegacyProjectFragments, hydrateGeoProject, joinLegacyGeoRows, legacyPropertyToGeoProject, mergeHydratedGeoProject, parseLegacyNumber } from "../src/modules/geoRegistry/legacyProjectAdapter.mjs";
+import { getCanonicalProjectData } from "../src/modules/geoRegistry/canonicalProjectData.mjs";
 
 const validText = `MEMORIAL DESCRITIVO
 Denominação: FAZENDA TESTE ANÔNIMA
@@ -79,6 +100,39 @@ test("polígono aberto é fechado de modo explícito para cálculo", () => {
   const vertices = [{ longitude: -56, latitude: -15 }, { longitude: -56.01, latitude: -15 }, { longitude: -56.01, latitude: -15.01 }];
   const feature = verticesToFeature(vertices); assert.equal(feature.geometry.coordinates[0].length, 4);
 });
+test("geometria canônica preserva quantidade, ordem e lon/lat documentais", () => {
+  const vertices = [{ code: "V3", longitude: -56.3, latitude: -15.3 }, { code: "V1", longitude: -56.1, latitude: -15.1 }, { code: "V2", longitude: -56.2, latitude: -15.4 }];
+  const feature = canonicalSurveyGeometry(vertices);
+  assert.deepEqual(feature.geometry.coordinates[0], [[-56.3,-15.3],[-56.1,-15.1],[-56.2,-15.4],[-56.3,-15.3]]);
+});
+test("geometria canônica rejeita conjunto parcialmente válido", () => {
+  assert.equal(canonicalSurveyGeometry([{longitude:-56,latitude:-15},{longitude:null,latitude:-16},{longitude:-57,latitude:-16}]), null);
+});
+
+test("Mesa Técnica deriva tabela, segmentos e geometria da mesma ordem canônica", () => {
+  const vertices=[
+    {code:"G61-M-1",type:"M",documentOrder:0,longitude:-56,latitude:-15,status:"OK"},
+    {code:"G61-V-2",type:"V",documentOrder:1,longitude:-56.01,latitude:-15,status:"OK"},
+    {code:"G61-P-3",type:"P",documentOrder:2,longitude:-56.01,latitude:-15.01,status:"OK"},
+  ];
+  const project=createGeoRegistryProject({property:{name:"IMÓVEL",area:1},registry:{registrationNumber:"632"},vertices,boundaries:[{fromVertex:"G61-M-1",toVertex:"G61-V-2",boundaryName:"FAZENDA X"},{fromVertex:"G61-V-2",toVertex:"G61-P-3",boundaryName:"RIO Y"},{fromVertex:"G61-P-3",toVertex:"G61-M-1",boundaryName:"FAZENDA X"}]});
+  const data=buildCanonicalSurveyData(project);
+  assert.deepEqual(data.segments.map((item)=>[item.fromVertex,item.toVertex]),[["G61-M-1","G61-V-2"],["G61-V-2","G61-P-3"],["G61-P-3","G61-M-1"]]);
+  assert.deepEqual(data.geometry.geometry.coordinates[0],vertices.map((item)=>[item.longitude,item.latitude]).concat([[-56,-15]]));
+  assert.equal(data.integrity.closed,true); assert.equal(data.integrity.status,"Revisar");
+});
+
+test("agrupamento por confrontante preserva todos os trechos sem simplificar", () => {
+  const vertices=[{code:"A",longitude:-56,latitude:-15},{code:"B",longitude:-56.01,latitude:-15},{code:"C",longitude:-56.02,latitude:-15.01},{code:"D",longitude:-56,latitude:-15.02}];
+  const segments=buildCanonicalSegments(vertices,[{fromVertex:"A",toVertex:"B",boundaryName:"RIO SINUOSO",distanceDocument:10},{fromVertex:"B",toVertex:"C",boundaryName:"RIO SINUOSO",distanceDocument:20},{fromVertex:"C",toVertex:"D",boundaryName:"RIO SINUOSO",distanceDocument:30},{fromVertex:"D",toVertex:"A",boundaryName:"FAZENDA"}]);
+  const river=groupCanonicalBoundaries(segments).find((item)=>item.name==="RIO SINUOSO");
+  assert.equal(river.segmentCount,3); assert.equal(river.totalLength,60); assert.deepEqual(river.segments.map(segmentSelectionId),["A→B","B→C","C→D"]);
+});
+
+test("seleção sincronizada usa o mesmo identificador no caminhamento e no mapa", () => {
+  const segment={fromVertex:"FIH-M-2025",toVertex:"CD5-M-4247"};
+  assert.equal(segmentSelectionId(segment),"FIH-M-2025→CD5-M-4247");
+});
 test("validação detecta vértice duplicado e quantidade insuficiente", () => {
   const result = validateGeometry([{ longitude: -56, latitude: -15 }, { longitude: -56, latitude: -15 }], {});
   assert.equal(result.status, "INCONSISTENTE"); assert.ok(result.issues.length >= 2);
@@ -86,6 +140,56 @@ test("validação detecta vértice duplicado e quantidade insuficiente", () => {
 test("conteúdo inesperado não causa exceção", () => assert.doesNotThrow(() => parseSigefMemorialText("%PDF conteúdo fora do padrão @@@")));
 test("normaliza ponto de milhar e vírgula decimal brasileira", () => {
   assert.equal(parseSigefMemorialText("Área: 1.891,7172 ha").data.property.area, 1891.7172);
+});
+test("adaptador hidrata projeto legado canônico com relações preservadas", async () => {
+  const tables = {
+    properties: [{ id:"kurizevu", legacy_source:"METRICA_TOPO_MDB", legacy_table:"CadImovel", legacy_id:"7", name:"FAZENDA KURIZEVU", municipality:"Paranatinga", state:"MT", sncr_incra:"901", area_original:"1.234,50", perimeter_original:"5.678,90", sigef_code:"CODIGO-LEGADO" }],
+    registry_records: [{ id:"mat", property_id:"kurizevu", registration_number:"632", registration_type:"Matrícula", book:"2", page:"10", registry_district:"Paranatinga", state:"MT", registry_office_name:"CRI Paranatinga" }],
+    property_owners: [{ property_id:"kurizevu", person_id:"owner", is_primary:true }],
+    people: [{ id:"owner", name:"PROPRIETÁRIO TESTE", cpf:"123", nationality:"Brasileira", profession:"Produtor", spouse_name:"CÔNJUGE" }],
+    companies: [], survey_projects: [], technical_responsibilities: [], technical_professionals: [],
+  };
+  const project = await hydrateGeoProject("kurizevu", async (name) => tables[name]);
+  assert.equal(project.property.name, "FAZENDA KURIZEVU"); assert.equal(project.property.municipality, "Paranatinga"); assert.equal(project.property.area, 1234.5); assert.equal(project.property.perimeter, 5678.9);
+  assert.equal(project.registry.registrationNumber, "632"); assert.equal(project.registry.book, "2"); assert.equal(project.registry.owner, "PROPRIETÁRIO TESTE"); assert.equal(project.owners[0].nationality, "Brasileira");
+  assert.equal(project.sigef.certificationId, ""); assert.equal(project.sigef.legacySigefCode, "CODIGO-LEGADO"); assert.equal(project.geometry, null);
+});
+test("reabertura substitui cache legado parcial pelos dados hidratados", () => {
+  const hydrated = legacyPropertyToGeoProject({ property_id:"kurizevu", name:"FAZENDA KURIZEVU", municipality:"Paranatinga", state:"MT", registration_number:"632", owner_name:"TITULAR MDB" });
+  const stale = legacyPropertyToGeoProject({ property_id:"kurizevu", name:"FAZENDA KURIZEVU" }); stale.geometry={type:"Feature",geometry:{type:"Polygon",coordinates:[]}}; stale.dataOrigins["property.name"]="PREENCHIMENTO MANUAL";
+  const merged = mergeHydratedGeoProject(hydrated, stale);
+  assert.equal(merged.property.municipality,"Paranatinga"); assert.equal(merged.registry.registrationNumber,"632"); assert.equal(merged.registry.owner,"TITULAR MDB"); assert.equal(merged.geometry,stale.geometry);
+});
+test("adaptador recupera campos normalizados ausentes do JSON legado", () => {
+  const project = buildGeoProjectFromLegacyData({ property:{id:"raw",legacy_source:"METRICA_TOPO_MDB",legacy_table:"CadImovel",legacy_raw_data:{NOMEIMOVEL:"FAZENDA RAW",CIDADE:"Paranatinga",ESTADO:"MT",AREA:"10,5",PERIMETRO:"900"}}, registries:[{property_id:"raw",legacy_raw_data:{NUMERO:"632",COMARCA:"Paranatinga"}}] });
+  assert.equal(project.property.municipality,"Paranatinga"); assert.equal(project.property.area,10.5); assert.equal(project.registry.registrationNumber,"632");
+});
+test("falha em relação técnica opcional não descarta a hidratação cadastral", async () => {
+  const tables={properties:[{id:"p",legacy_source:"METRICA_TOPO_MDB",legacy_table:"CadImovel",name:"IMÓVEL",municipality:"Cuiabá"}],registry_records:[],property_owners:[],people:[],companies:[],survey_projects:[],technical_professionals:[]};
+  const project=await hydrateGeoProject("p",async(name)=>name==="technical_responsibilities"?Promise.reject(new Error("tabela indisponível")):tables[name]);
+  assert.equal(project.property.municipality,"Cuiabá");
+});
+test("FAZENDA KURIZEVU 7498 + 7529: banco, adaptador e canônico preservam matrícula 632", () => {
+  const first=legacyPropertyToGeoProject({property_id:"uuid-7498",legacy_id:"7498",registry_legacy_id:"7516",owner_legacy_id:"7521",name:"FAZENDA KURIZEVU",sncr_incra:"9061151046713",sigef_code:"a6031fda-eab4-4201-8578-080a31373360",registration_number:"632",cns:"06.327-1",registry_office_name:"1º Registro de Imóveis de Paranatinga",registry_district:"Paranatinga",owner_name:"ADEMIR DE CAMPOS MARTINS",owner_document:"277.599.698-13"});
+  const second=legacyPropertyToGeoProject({property_id:"uuid-7529",legacy_id:"7529",registry_legacy_id:"7547",owner_legacy_id:"7552",name:"FAZENDA KURIZEVU",municipality:"Gaúcha do Norte",state:"MT",area_original:"7866,7957 ha",perimeter_original:"56.724,25 m",sncr_incra:"9061151046713",sigef_code:"a6031fda-eab4-4201-8578-080a31373360",registration_number:"632",cns:"06.327-1"});
+  const project=consolidateLegacyProjectFragments([first,second]); const canonical=getCanonicalProjectData(project);
+  assert.deepEqual(project.legacySource.propertyIds,["7498","7529"]); assert.deepEqual(project.legacySource.registryIds,["7516","7547"]); assert.deepEqual(project.legacySource.ownerIds,["7521","7552"]); assert.equal(project.registry.registrationNumber,"632"); assert.equal(canonical.registry.registrationNumber,"632"); assert.equal(canonical.property.municipality,"Gaúcha do Norte"); assert.equal(canonical.property.area,7866.7957); assert.equal(canonical.owner.name,"ADEMIR DE CAMPOS MARTINS");
+});
+
+test("documentOrder preserva a sequência quando o Memorial mistura DMS e coordenadas decimais", () => {
+  const parsed=parseSigefMemorialText(`G61-M-1001 -15,500000 -56,100000\nG61-V-1002 15°30'01,000" S 56°06'01,000" W\nG61-P-1003 -15,510000 -56,110000`);
+  assert.deepEqual(parsed.data.vertices.map((item)=>item.code),["G61-M-1001","G61-V-1002","G61-P-1003"]);
+  assert.deepEqual(parsed.data.vertices.map((item)=>item.documentOrder),[0,1,2]);
+  assert.deepEqual(parsed.vertexDiagnostic,{found:3,structured:3,rejected:0});
+});
+
+test("diagnóstico lista vértice rejeitado sem descarte silencioso", () => {
+  const parsed=parseSigefMemorialText("G61-P-9001 Este: ??? Norte: 8.200.000,00");
+  assert.equal(parsed.vertexDiagnostic.rejected,1); assert.equal(parsed.rejectedVertices[0].code,"G61-P-9001"); assert.match(parsed.rejectedVertices[0].originalText,/Este/);
+});
+test("Visão Geral não substitui mais registry pelo bloco vazio do Memorial", () => {
+  const source=readFileSync(new URL("../src/modules/geoRegistry/GeoRegistryModule.jsx",import.meta.url),"utf8");
+  assert.doesNotMatch(source,/registry:\s*project\.memorial\?\.registry/); assert.match(source,/Overview project=\{canonicalProject\}/);
 });
 test("reconhece campo separado do valor por quebra de linha", () => {
   const result = parseSigefMemorialText("Município:\nCuiabá\nUF:\nMT");
@@ -110,6 +214,11 @@ test("UTM sem parâmetros permanece incompleto com mensagem explícita", () => {
 test("identifica latitude e longitude decimais", () => {
   const result = parseSigefMemorialText("G61-M-3064 -15,500000 -56,100000\nG61-M-3065 -15,510000 -56,100000\nG61-M-3066 -15,510000 -56,110000");
   assert.match(result.coordinateType, /latitude\/longitude/); assert.equal(result.data.vertices.length, 3);
+});
+test("DMS respeita hemisférios N, S, E e W", () => {
+  const southWest = parseSigefMemorialText(`G61-M-1001 15°42'09,314" S 56°29'41,396" W\nG61-M-1002 15°42'10,000" S 56°29'42,000" W\nG61-M-1003 15°42'11,000" S 56°29'41,000" W`).data.vertices[0];
+  const northEast = parseSigefMemorialText(`G61-M-2001 15°42'09,314" N 56°29'41,396" E\nG61-M-2002 15°42'10,000" N 56°29'42,000" E\nG61-M-2003 15°42'11,000" N 56°29'41,000" E`).data.vertices[0];
+  assert.ok(southWest.latitude < 0 && southWest.longitude < 0); assert.ok(northEast.latitude > 0 && northEast.longitude > 0);
 });
 test("área divergente sem tolerância exige conferência", () => {
   const vertices = [{ longitude: -56, latitude: -15 }, { longitude: -56.01, latitude: -15 }, { longitude: -56.01, latitude: -15.01 }];
@@ -379,14 +488,179 @@ function cartorialProject() {
 }
 
 test("requerimento completo fica pronto para revisão", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.equal(pieces.request.state, "PRONTO PARA REVISÃO"); assert.equal(pieces.request.validation.ready, true); assert.match(pieces.request.templateOriginal, /AO ILUSTRÍSSIMO SENHOR OFICIAL/); });
-test("requerimento informa exatamente os campos pendentes", () => { const project = cartorialProject(); project.registry.registryOffice = ""; const pieces = buildCartorialPieces(project); assert.equal(pieces.request.state, "DADOS PENDENTES"); assert.ok(pieces.request.validation.missingFields.includes("registryOffice")); assert.match(pieces.request.templateOriginal, /\[DADO PENDENTE\]/); });
+test("requerimento informa exatamente os campos críticos sem imprimir placeholder", () => { const project = cartorialProject(); project.registry.registryOffice = ""; const pieces = buildCartorialPieces(project); assert.equal(pieces.request.state, "DADOS PENDENTES"); assert.ok(pieces.request.validation.criticalMissing.includes("registryOffice")); assert.doesNotMatch(pieces.request.templateOriginal, /DADO PENDENTE|PREENCHER|undefined|null/); });
 test("quadro de coordenadas preserva DMS e ordem original", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.deepEqual(pieces.coordinates.rows.map((item) => item.code), ["G61-M-3063", "G61-M-3064"]); assert.equal(pieces.coordinates.rows[0].longitude, `56°29'41,396" W`); assert.equal(pieces.coordinates.rows[0].latitude, `15°42'09,314" S`); });
 test("quadro de confrontantes usa cinco valores documentais antes dos calculados", () => { const pieces = buildCartorialPieces(cartorialProject()); assert.equal(pieces.boundaries.rows.length, 5); assert.equal(pieces.boundaries.rows[0].azimuth, "10°00'"); assert.equal(pieces.boundaries.rows[0].distance, "100,50"); assert.notEqual(pieces.boundaries.rows[0].azimuth, "999"); });
 test("edição manual de confrontante não destrói valor original", () => { const original = cartorialProject().boundaries[0]; const edited = applyBoundarySupplement(original, { boundaryName: "EDITADO", owner: "VIZINHO" }); assert.equal(edited.originalData.boundaryName, "CONFRONTANTE 1"); assert.equal(edited.boundaryName, "CONFRONTANTE 1"); assert.equal(edited.additionalData.boundaryName, "EDITADO"); const context = buildCartorialDocumentContext({ ...cartorialProject(), boundaries: [edited] }); assert.equal(context.boundaries[0].originalData.boundaryName, "CONFRONTANTE 1"); });
 test("documento SIGEF independente não é bloqueado por matrícula", () => { const project = cartorialProject(); project.registry = { confirmed: false }; project.registryState = "NOT_IMPORTED"; const context = buildCartorialDocumentContext(project); assert.equal(validateDocumentData("coordinates", context).ready, true); assert.equal(validateDocumentData("boundaries", context).ready, true); });
-test("checklist permanece editável e preserva observação", () => { const project = cartorialProject(); project.checklist = updateChecklistItem(project.checklist, "registro-matricula", { status: "received", observation: "Certidão de 30 dias" }); const pieces = buildCartorialPieces(project); assert.equal(pieces.checklist.state, "PRONTO"); assert.equal(pieces.checklist.rows[0].status, "received"); assert.equal(pieces.checklist.rows[0].observation, "Certidão de 30 dias"); });
+test("checklist legado permanece editável sem substituir o motor inteligente", () => { const project = cartorialProject(); project.checklist = updateChecklistItem(project.checklist, "registro-matricula", { status: "received", observation: "Certidão de 30 dias" }); const pieces = buildCartorialPieces(project); assert.equal(project.checklist[0].status, "received"); assert.equal(project.checklist[0].observation, "Certidão de 30 dias"); assert.ok(["NOT_READY","REVIEW_REQUIRED","READY"].includes(pieces.checklist.state)); assert.ok(pieces.checklist.rows.every((item)=>item.requiredLevel&&item.reason)); });
 
 test("requerimento baseado no modelo real reutiliza qualificação e procedimento", () => { const project = cartorialProject(); project.cartorialData = { ...project.cartorialData, "owner.rg": { value: "123456", confirmed: true }, "property.incraCode": { value: "901.234.567", confirmed: true }, "procedure.returnNote": { value: "ND-77", confirmed: true }, "procedure.serviceOrder": { value: "OS-88", confirmed: true }, "technical.registrationNumber": { value: "49539140153", confirmed: true } }; const request = buildCartorialPieces(project).request.templateOriginal; assert.match(request, /MARCIA BERNARDES/); assert.match(request, /103\.328/); assert.match(request, /901\.234\.567/); assert.match(request, /ND-77/); assert.match(request, /OS-88/); assert.match(request, /ALEXANDRE MAGNO/); assert.match(request, /49539140153/); });
 test("memorial cria narrativa fechada com azimutes e distâncias documentais", () => { const context = buildCartorialDocumentContext(cartorialProject()); const narrative = buildPerimeterNarrative(context); assert.match(narrative, /Inicia-se a descrição/); assert.match(narrative, /10°00'/); assert.match(narrative, /100,50 m/); assert.match(narrative, /ponto inicial da descrição deste perímetro/); });
 test("anuência gera um documento por confrontante e somente seus trechos", () => { const project = cartorialProject(); project.boundaries[1].boundaryName = project.boundaries[0].boundaryName; const documents = buildBoundaryDocuments(buildCartorialDocumentContext(project)); assert.equal(documents.length, 4); assert.equal(documents[0].rows.length, 2); assert.ok(documents[0].rows.every((row) => row.azimuth && row.distance)); });
 test("autopreenchimento cartorial prioriza confirmação manual sem apagar Memorial", () => { const project = cartorialProject(); project.cartorialData["owner.name"] = { value: "NOME CONFIRMADO", confirmed: true, updatedAt: "2026-08-12" }; const context = buildCartorialDocumentContext(project); assert.equal(context.owner.name.value, "NOME CONFIRMADO"); assert.equal(context.owner.name.origin, "MANUAL_CONFIRMED"); assert.equal(project.memorial.registry.owner, "MARCIA BERNARDES DA CUNHA"); });
+
+test("persistência cartorial sobrevive a serialização e reabertura completa", () => {
+  const memory = new Map(); globalThis.localStorage = { getItem: (key) => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, String(value)), removeItem: (key) => memory.delete(key) };
+  const values = { "owner.document": "481.645.859-04", "owner.rg": "33595093", "owner.profession": "Professora do Ensino Fundamental", "registry.office": "1º Ofício de Registro de Imóveis", "registry.district": "Várzea Grande", "property.incraCode": "9040901048414" };
+  const project = { ...cartorialProject(), id: "persistencia-cartorial" }; saveProjectToStorage(globalThis.localStorage, confirmCartorialData(project, values, "2026-08-12T12:00:00.000Z"));
+  const reopened = JSON.parse(JSON.stringify(listProjectsFromStorage(globalThis.localStorage)))[0];
+  for (const [key, expected] of Object.entries(values)) { assert.equal(reopened.cartorialData[key].value, expected); assert.equal(reopened.cartorialData[key].source, "MANUAL_CONFIRMED"); assert.equal(reopened.cartorialData[key].confirmed, true); }
+  assert.equal(buildCartorialDocumentContext(reopened).owner.document.value, "481.645.859-04"); assert.equal(buildCartorialDocumentContext(reopened).registry.office.value, "1º Ofício de Registro de Imóveis");
+  delete globalThis.localStorage;
+});
+
+test("planta CHACARA CANAA preserva códigos e escolhe escala cartográfica convencional", () => {
+  const project = cartorialProject();
+  project.geodesy.utmZone = "21";
+  project.vertices.push({ code: "G61-M-3065", longitudeDecimal: -56.495, latitudeDecimal: -15.695 });
+  project.geometry = { type: "Feature", geometry: { type: "Polygon", coordinates: [[[-56.49, -15.7], [-56.5, -15.71], [-56.495, -15.695], [-56.49, -15.7]]] } };
+  const context = { geometry: project.geometry, vertices: project.vertices, boundaries: project.boundaries, datum: "SIRGAS 2000", utmZone: "21", area: project.property.area, perimeter: project.property.perimeter };
+  const layout = buildPlantLayout(context);
+  assert.deepEqual(layout.vertexPoints.map((item) => item.vertex.code), ["G61-M-3063", "G61-M-3064", "G61-M-3065"]);
+  assert.ok([500, 1000, 2000, 5000, 10000, 20000, 25000, 50000].includes(layout.scale));
+  assert.equal(layout.boundaryLabels[0].title, "CONFRONTANTE 1");
+  assert.equal(layout.scaleX, layout.scaleY);
+  assert.ok(generateLocationMap(context).bounds);
+});
+
+test("segunda geometria altera enquadramento e escala sem alterar o template", () => {
+  const small = { type: "Feature", geometry: { type: "Polygon", coordinates: [[[-56.49, -15.7], [-56.489, -15.7], [-56.489, -15.699], [-56.49, -15.7]]] } };
+  const large = { type: "Feature", geometry: { type: "Polygon", coordinates: [[[-56.49, -15.7], [-56.39, -15.7], [-56.39, -15.6], [-56.49, -15.7]]] } };
+  const context = (geometry) => ({ geometry, vertices: geometry.geometry.coordinates[0].slice(0,-1).map(([longitudeDecimal,latitudeDecimal],index)=>({code:`P${index+1}`,longitudeDecimal,latitudeDecimal})), boundaries: [], datum:"SIRGAS 2000", utmZone:"21" });
+  const smallContext=context(small),largeContext=context(large),smallLayout = buildPlantLayout(smallContext),largeLayout = buildPlantLayout(largeContext);
+  assert.ok(largeLayout.scale > smallLayout.scale);
+  assert.notDeepEqual(generateLocationMap(smallContext).bounds, generateLocationMap(largeContext).bounds);
+  assert.deepEqual(smallLayout.viewport, largeLayout.viewport);
+});
+
+test("planta bloqueia latitude/longitude quando o fuso UTM documental está ausente", () => { const project=cartorialProject(); project.geometry={type:"Feature",geometry:{type:"Polygon",coordinates:[[[-56.49,-15.7],[-56.5,-15.71],[-56.49,-15.71],[-56.49,-15.7]]]}}; project.vertices=[{code:"A",longitudeDecimal:-56.49,latitudeDecimal:-15.7},{code:"B",longitudeDecimal:-56.5,latitudeDecimal:-15.71},{code:"C",longitudeDecimal:-56.49,latitudeDecimal:-15.71}]; const canonical=buildCanonicalGeometry({geometry:project.geometry,vertices:project.vertices,datum:"SIRGAS 2000",utmZone:""}); assert.equal(canonical.valid,false); assert.match(canonical.status,/BLOQUEADA/); assert.match(canonical.issues.join(" "),/Fuso UTM/); });
+
+test("coordenadas métricas nulas nunca são convertidas silenciosamente para zero", () => { const geometry={type:"Feature",geometry:{type:"Polygon",coordinates:[[[-56.49,-15.7],[-56.5,-15.71],[-56.49,-15.71],[-56.49,-15.7]]]}}; const vertices=geometry.geometry.coordinates[0].slice(0,-1).map(([longitudeDecimal,latitudeDecimal],index)=>({code:`N${index}`,longitudeDecimal,latitudeDecimal,east:null,north:""})); const canonical=buildCanonicalGeometry({geometry,vertices,datum:"SIRGAS 2000",utmZone:""}); assert.equal(canonical.valid,false); assert.equal(canonical.projection,null); assert.match(canonical.issues.join(" "),/Fuso UTM/); });
+
+test("transformação da planta usa escala uniforme e preserva distâncias e ângulos", () => { const context={geometry:{type:"Feature",geometry:{type:"Polygon",coordinates:[[[-56.49,-15.7],[-56.5,-15.71],[-56.495,-15.695],[-56.49,-15.7]]]}},vertices:[{code:"A",longitudeDecimal:-56.49,latitudeDecimal:-15.7},{code:"B",longitudeDecimal:-56.5,latitudeDecimal:-15.71},{code:"C",longitudeDecimal:-56.495,latitudeDecimal:-15.695}],boundaries:[],datum:"SIRGAS 2000",utmZone:"21"}; const canonical=buildCanonicalGeometry(context),presentation=buildUniformPresentation(canonical,{width:1122,height:785},.37); assert.equal(presentation.scaleX,presentation.scaleY); assert.equal(presentation.audit.valid,true); assert.ok(presentation.audit.distanceError<1e-8); assert.ok(presentation.audit.angleError<1e-8); assert.equal(validateRigidTransform(canonical.projected,presentation.points.slice(0,-1),presentation.scale).valid,true); });
+
+test("DXF CAD mantém perímetro fechado, layers e referência raster relativa", () => {
+  const project = cartorialProject();
+  project.geodesy.utmZone = "21";
+  project.vertices.push({ code: "G61-M-3065", longitudeDecimal: -56.495, latitudeDecimal: -15.695 });
+  project.geometry = { type: "Feature", geometry: { type: "Polygon", coordinates: [[[-56.49, -15.7], [-56.5, -15.71], [-56.495, -15.695], [-56.49, -15.7]]] } };
+  const dxf = buildPlantDxf({ ...buildCartorialPieces(project).plant.context, boundaries: project.boundaries }, "CHACARA_CANAA_LOCALIZACAO.png");
+  for (const layer of CAD_LAYERS) assert.match(dxf, new RegExp(layer));
+  assert.match(dxf, /POLYLINE[\s\S]*ROTEIRO_PERIMETRICO[\s\S]*66\r\n1/);
+  assert.match(dxf, /\$LIMMAX[\s\S]*10\r\n594[\s\S]*20\r\n420/);
+  assert.match(dxf, /IMAGEM EXTERNA: CHACARA_CANAA_LOCALIZACAO\.png/);
+  assert.doesNotMatch(dxf, /[A-Z]:\\/);
+  assert.equal(validatePlantDxf(dxf).version, DXF_VERSION);
+  assert.doesNotMatch(dxf, /\r\nOBJECTS\r\n|\r\nIMAGE\r\n|\r\nIMAGEDEF\r\n/);
+  assert.equal(safeCadBaseName("Chácara Canaã / 01"), "CHACARA_CANAA_01");
+});
+
+test("classifica estrada e rio como confrontação especial", () => {
+  assert.equal(classifyBoundaryType("Estrada de Servidão"), "ESTRADA_SERVIDAO");
+  assert.equal(classifyBoundaryType("Rodovia MT-251"), "RODOVIA_ESTADUAL");
+  assert.equal(classifyBoundaryType("BR-364"), "RODOVIA_FEDERAL");
+  assert.equal(classifyBoundaryType("Rio Cuiabá"), "RIO");
+  assert.equal(classifyBoundaryType("Córrego do Meio"), "CORREGO");
+});
+
+test("imóvel privado não gera laudo especial e rio ou estrada não geram anuência", () => {
+  const project = cartorialProject();
+  project.boundaries = [
+    { ...project.boundaries[0], boundaryName: "FAZENDA VIZINHA" },
+    { ...project.boundaries[1], boundaryName: "Estrada Municipal" },
+    { ...project.boundaries[2], boundaryName: "Rio Cuiabá" },
+  ];
+  const context = buildCartorialDocumentContext(project);
+  const special = buildSpecialBoundaryReports(context);
+  assert.deepEqual(special.map((item) => item.type), ["ESTRADA_MUNICIPAL", "RIO"]);
+  const consents = buildBoundaryDocuments(context);
+  assert.equal(consents.length, 1);
+  assert.equal(consents[0].boundary.name, "FAZENDA VIZINHA");
+});
+
+test("dossiê inclui somente peças selecionadas e preserva a ordem do índice", () => {
+  const context = buildCartorialDocumentContext(cartorialProject());
+  const selected = ["cover", "index", "request", "technicalReport", "comparison"];
+  const dossier = buildDossier(context, {}, selected);
+  assert.deepEqual(dossier.selected, selected);
+  assert.deepEqual(dossier.index.map((item) => item.id), ["request", "technicalReport", "comparison"]);
+  assert.ok(DOSSIER_DEFAULT_ORDER.indexOf("request") < DOSSIER_DEFAULT_ORDER.indexOf("comparison"));
+});
+
+test("impressão isola documento em fundo branco e não força quebra após a última página", () => {
+  const css = readFileSync(new URL("../src/modules/geoRegistry/geo-registry.css", import.meta.url), "utf8");
+  assert.match(css, /#print-root,.print-document\{background:#fff!important;color:#000!important\}/);
+  assert.match(css, /\.gr-a4:last-child\{break-after:auto!important;page-break-after:auto!important\}/);
+  assert.match(css, /\.print-document\{position:absolute!important;left:0!important;top:0!important/);
+});
+
+test("cenário A cria anuências para confrontantes particulares", () => {
+  const project=cartorialProject(); const result=evaluateCartorialChecklist(project);
+  assert.equal(result.items.filter((item)=>item.id.startsWith("boundary-consent-")).length,5);
+});
+
+test("cenários B e C sugerem SINFRA e DNIT com laudo de via", () => {
+  const state=evaluateBoundaryRequirements({fromVertex:"A",toVertex:"B",boundaryName:"MT-251",boundaryType:"STATE_HIGHWAY"},MATO_GROSSO_GEO_BASE);
+  const federal=evaluateBoundaryRequirements({fromVertex:"B",toVertex:"C",boundaryName:"BR-364",boundaryType:"FEDERAL_HIGHWAY"},MATO_GROSSO_GEO_BASE);
+  assert.match(state.map((item)=>item.reason).join(" "),/SINFRA\/MT/); assert.ok(state.some((item)=>item.id.startsWith("road-report")));
+  assert.match(federal.map((item)=>item.reason).join(" "),/DNIT/); assert.ok(federal.some((item)=>item.id.startsWith("road-report")));
+});
+
+test("cenários D e E sugerem INTERMAT e FUNAI com alerta crítico", () => {
+  const project=cartorialProject(); project.boundaries=[{origin:"MEMORIAL",fromVertex:"A",toVertex:"B",boundaryName:"Terra pública",boundaryType:"PUBLIC_STATE"},{origin:"MEMORIAL",fromVertex:"B",toVertex:"C",boundaryName:"Terra Indígena",boundaryType:"INDIGENOUS_LAND"}];
+  const result=evaluateCartorialChecklist(project);
+  assert.match(result.items.map((item)=>item.reason).join(" "),/INTERMAT/); assert.match(result.items.map((item)=>item.reason).join(" "),/FUNAI/);
+  assert.ok(result.alerts.some((alert)=>alert.priority==="CRITICAL"&&alert.title.includes("FUNAI")));
+});
+
+test("cenário F cria laudo de curso d'água sem presumir dominialidade", () => {
+  const rules=evaluateBoundaryRequirements({fromVertex:"A",toVertex:"B",boundaryName:"Rio Cuiabá",boundaryType:"RIVER"});
+  assert.ok(rules.some((item)=>item.id.startsWith("water-report"))); assert.ok(rules.some((item)=>item.id.startsWith("water-domain")&&item.status==="REVIEW_REQUIRED"));
+});
+
+test("cenários G e H condicionam documentos societários e procuração", () => {
+  const project={...cartorialProject(),ownerType:"LEGAL_ENTITY",representation:{exists:true}}; const result=evaluateCartorialChecklist(project);
+  assert.equal(result.items.find((item)=>item.id==="corporate-documents").status,"PENDING"); assert.equal(result.items.find((item)=>item.id==="power-of-attorney").status,"PENDING");
+});
+
+test("cenário I aplica perfil editável que exige CAR e Laudo", () => {
+  const profile=createRegistryOfficeProfile({id:"nova-mutum",name:"1º Ofício — Nova Mutum",state:"MT",defaultRequirements:[{id:"car",title:"CAR",required:true},{id:"technical-report",title:"Laudo",required:true}]});
+  const result=evaluateCartorialChecklist(cartorialProject(),profile);
+  assert.equal(result.items.find((item)=>item.id==="car").required,true); assert.equal(result.items.find((item)=>item.id==="technical-report").required,true);
+});
+
+test("CHACARA CANAA separa imóveis particulares de Estrada de Servidão", () => {
+  const project=cartorialProject(); project.boundaries[4]={...project.boundaries[4],boundaryName:"Estrada de Servidão",boundaryType:"EASEMENT_ROAD"}; const result=evaluateCartorialChecklist(project);
+  assert.equal(result.items.filter((item)=>item.id.startsWith("boundary-consent-")).length,4); assert.ok(result.items.some((item)=>item.id.startsWith("easement-review-"))); assert.ok(result.items.some((item)=>item.id.startsWith("easement-report-")));
+});
+
+test("READY exige que todos os itens obrigatórios estejam disponíveis ou confirmados", () => {
+  assert.equal(calculateProtocolReadiness([{required:true,status:"PENDING"}]).state,"NOT_READY"); assert.equal(calculateProtocolReadiness([{required:true,status:"REVIEW_REQUIRED"}]).state,"REVIEW_REQUIRED"); assert.equal(calculateProtocolReadiness([{required:true,status:"AVAILABLE"},{required:true,status:"CONFIRMED"},{required:true,status:"NOT_APPLICABLE"}]).state,"READY");
+});
+
+test("override preserva auditoria, relatório lista pendências e dossiê usa documentos vinculados", () => {
+  const project=cartorialProject(); const changed=applyChecklistOverride(project,"ccir",{status:"AVAILABLE",documentIds:["doc-ccir"]},"TESTE","2026-08-17T12:00:00.000Z"); const evaluation=evaluateCartorialChecklist(changed); const ccir=evaluation.items.find((item)=>item.id==="ccir");
+  assert.equal(ccir.audit[0].actor,"TESTE"); assert.ok(buildPendingRequirementsReport(changed,evaluation).items.length>0); assert.deepEqual(dossierItemsFromChecklist(evaluation),[{requirementId:"ccir",documentId:"doc-ccir"}]);
+});
+
+test("camada pt-BR traduz status, níveis, fontes e prioridades sem expor enums", () => {
+  assert.equal(statusLabel("PENDING"),"Pendente"); assert.equal(statusLabel("AVAILABLE"),"Disponível"); assert.equal(statusLabel("CONFIRMED"),"Confirmado"); assert.equal(statusLabel("NOT_APPLICABLE"),"Não aplicável"); assert.equal(statusLabel("REVIEW_REQUIRED"),"Revisão necessária"); assert.equal(requirementLabel("STATE_CORE"),"Exigência estadual"); assert.equal(requirementLabel("REGISTRY_PROFILE"),"Exigência do cartório"); assert.equal(sourceLabel("BOUNDARY_RULE"),"Regra de confrontação"); assert.equal(priorityLabel("CRITICAL"),"Crítica");
+});
+
+test("validador documental separa críticos, recomendados e opcionais",()=>{const context=buildCartorialDocumentContext(cartorialProject());const result=validateDocumentData("request",context);assert.equal(result.ready,true);assert.ok(result.recommendedMissing.includes("owner.phone"));assert.ok(result.optionalMissing.includes("procedure.protocol"));});
+test("campo crítico bloqueia documento e campo opcional não bloqueia",()=>{const project=cartorialProject();delete project.cartorialData["procedure.notes"];let result=buildCartorialPieces(project).request.validation;assert.equal(result.ready,true);project.registry.registryOffice="";result=buildCartorialPieces(project).request.validation;assert.equal(result.ready,false);assert.ok(result.criticalMissing.includes("registryOffice"));});
+test("requerimento e declaração não geram tokens proibidos ou data quebrada",()=>{const project=cartorialProject();const pieces=buildCartorialPieces(project);assert.deepEqual(documentTextIssues(pieces.request.text),[]);assert.deepEqual(documentTextIssues(pieces.ownerDeclaration.text),[]);assert.doesNotMatch(pieces.request.text,/Livramento,\s*\./);});
+test("pessoa jurídica não recebe exigência de estado civil ou contrato social no requerimento-base",()=>{const project=cartorialProject();project.ownerType="LEGAL_ENTITY";project.cartorialData={...project.cartorialData,"owner.type":{value:"LEGAL_ENTITY",confirmed:true},"legalEntity.corporateName":{value:"EMPRESA RURAL LTDA",confirmed:true},"legalEntity.document":{value:"00.000.000/0001-00",confirmed:true}};const text=buildCartorialPieces(project).request.text;assert.match(text,/EMPRESA RURAL LTDA/);assert.doesNotMatch(text,/estado civil|DADO PENDENTE|contrato social/i);});
+test("anuência sem proprietário confrontante fica bloqueada sem perder trechos documentais",()=>{const documents=buildBoundaryDocuments(buildCartorialDocumentContext(cartorialProject()));assert.equal(documents[0].validation.ready,false);assert.equal(documents[0].warning,"Proprietário do confrontante não informado.");assert.ok(documents[0].rows.every((row)=>row.azimuth&&row.distance));});
+test("memorial mantém fuso e meridiano opcionais sem texto vazio proibido",()=>{const pieces=buildCartorialPieces(cartorialProject());assert.equal(pieces.memorial.document.geodesy.zone.value,"");assert.equal(pieces.memorial.validation.ready,true);});
+test("notificação lista particulares e exclui estrada de servidão",()=>{const project=cartorialProject();project.boundaries.push({...project.boundaries[0],boundaryName:"Estrada de Servidão"});const eligible=eligibleBoundariesForNotification(project.boundaries);assert.equal(eligible.length,5);assert.ok(eligible.every((item)=>!item.name.includes("Estrada")));});
+test("notificação sem endereço e CPF informa pendências específicas",()=>{const context=buildCartorialDocumentContext(cartorialProject());const boundary=eligibleBoundariesForNotification(cartorialProject().boundaries)[0];const result=validateBoundaryNotification(context,boundary);assert.ok(result.criticalMissing.some((item)=>item.message.includes("endereço")));assert.ok(result.recommendedMissing.some((item)=>item.label.includes("CPF")));});
+test("notificação PF com endereço completo fica pronta",()=>{const context=buildCartorialDocumentContext({...cartorialProject(),cartorialData:{...cartorialProject().cartorialData,"procedure.requestDate":{value:"17/08/2026",confirmed:true}}});const boundary=eligibleBoundariesForNotification(cartorialProject().boundaries)[0];boundary.complement={owner:"JOÃO DA SILVA",boundaryPossessionType:"PROPRIETÁRIO",address:"Rua Um",addressNumber:"10",municipality:"Cuiabá",state:"MT",postalCode:"78000-000"};assert.equal(validateBoundaryNotification(context,boundary).ready,true);});
+test("notificação PJ exige CNPJ e usa prazo centralizado",()=>{const context=buildCartorialDocumentContext({...cartorialProject(),cartorialData:{...cartorialProject().cartorialData,"procedure.requestDate":{value:"17/08/2026",confirmed:true}}});const boundary=eligibleBoundariesForNotification(cartorialProject().boundaries)[0];boundary.complement={partyType:"LEGAL_ENTITY",corporateName:"FAZENDA EMPRESA LTDA",boundaryPossessionType:"PROPRIETÁRIO",notificationAddressFree:"Avenida Central, 100, Cuiabá/MT"};const result=validateBoundaryNotification(context,boundary);assert.ok(result.criticalMissing.some((item)=>item.message.includes("CNPJ")));assert.equal(notificationTemplate.legalDeadline,15);});
+test("lote de notificações separa prontas e rascunhos com status em português",()=>{const project={...cartorialProject(),cartorialData:{...cartorialProject().cartorialData,"procedure.requestDate":{value:"17/08/2026",confirmed:true}}};const context=buildCartorialDocumentContext(project);const eligible=eligibleBoundariesForNotification(project.boundaries);eligible[0].complement={owner:"JOÃO",boundaryPossessionType:"PROPRIETÁRIO",notificationAddressFree:"Rua Um, 10, Cuiabá/MT"};const batch=buildNotificationBatch(context,eligible.slice(0,2));assert.equal(batch[0].status,"READY");assert.equal(batch[1].status,"DRAFT");assert.equal(notificationStatusLabel("READY"),"Pronta para assinatura");assert.equal(notificationStatusLabel("DRAFT"),"Rascunho");});
+test("preset Métrica TOPO mapeia chaves reais sem descartar campos desconhecidos",()=>{assert.equal(METRICA_TOPO_PRESET.tables.CadImovel.fields.CodigoImovel,"legacy_id");assert.equal(METRICA_TOPO_PRESET.tables.CadMatricula.fields.CodigoImovel,"property.legacy_id");assert.deepEqual(unmappedFields({name:"CadCliente",columns:[{name:"Codigo_Cliente"},{name:"IE"}]}),["IE"]);});
+test("simulação do MDB não realiza escritas e classifica registros para revisão",()=>{const analysis={tables:[{name:"CadCliente",count:207,columns:[]},{name:"CadEmpresa",count:3,columns:[]},{name:"CadImovel",count:7524,columns:[]},{name:"CadMatricula",count:7536,columns:[]},{name:"CadProprietario",count:7529,columns:[]},{name:"CadServico",count:209,columns:[]}],issues:[{table:"CadImovel",kind:"EMPTY",count:3},{table:"CadProprietario",kind:"EMPTY",count:50}],totals:{incomplete:53,orphanedRelationships:5,duplicateGroups:1597}};const result=buildImportSimulation(analysis);assert.equal(result.totals.found,23008);assert.equal(result.totals.writes,0);assert.equal(result.mode,"SIMULATE");assert.equal(result.entities.find((item)=>item.table==="CadImovel").ready,7521);});
+test("imóvel Métrica é adaptado para Projeto GEO sem validar dados automaticamente",()=>{const project=legacyPropertyToGeoProject({property_id:"abc",legacy_id:"42",name:"FAZENDA TESTE",municipality:"Cuiabá",state:"MT",area_original:"1.234,5678 ha",perimeter_original:"4.321,09 m",sigef_code:"SIGEF-1",registration_number:"123",cns:"456",registry_office_name:"CRI",registry_district:"Cuiabá",owner_name:"Maria",owner_document:"000.000.000-00",created_at:"2026-08-18T00:00:00Z"});assert.equal(project.id,"metrica-abc");assert.equal(project.property.name,"FAZENDA TESTE");assert.equal(project.property.area,1234.5678);assert.equal(project.property.perimeter,4321.09);assert.equal(project.registry.owner,"Maria");assert.equal(project.registryState,"REVIEW_REQUIRED");assert.equal(project.registry.confirmed,false);assert.equal(project.dataOrigins["property.name"],"IMPORTAÇÃO MÉTRICA TOPO");});
+test("número legado inválido permanece vazio",()=>{assert.equal(parseLegacyNumber(""),null);assert.equal(parseLegacyNumber("não informado"),null);});
+test("tabelas importadas são relacionadas para a lista da Averbação GEO",()=>{const rows=joinLegacyGeoRows([{id:"p1",legacy_source:"METRICA_TOPO_MDB",legacy_table:"CadImovel",legacy_id:"7",name:"SÍTIO"}],[{id:"r1",property_id:"p1",registration_number:"10",cns:"20"}],[{id:"o1",property_id:"p1",person_id:"person1",is_primary:true}],[{id:"person1",name:"José",cpf:"123"}],[]);assert.equal(rows.length,1);assert.equal(rows[0].registration_number,"10");assert.equal(rows[0].owner_name,"José");});

@@ -4,6 +4,14 @@
 .cloud-base-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .cloud-base-buttons button{border:1px solid #316750;background:#031e15;color:#d7fae7;border-radius:999px;padding:8px 12px;font-weight:800}
 .cloud-base-buttons button.active{background:#ffe000;color:#102018;border-color:#ffe000}
-.cloud-row-selected{background:rgba(31,213,139,.08)}
+.cloud-page .cloud-card p{color:#c8f3dc}
+.cloud-page .cloud-table{background:#08271c}
+.cloud-page .cloud-table thead{background:#031e12;color:#fde047}
+.cloud-page .cloud-table tbody tr{background:#08271c}
+.cloud-page .cloud-table tbody tr:hover{background:#103c2b}
+.cloud-page .cloud-table tbody tr.cloud-row-selected{background:#164936}
+.cloud-page .cloud-table tbody tr.cloud-row-selected:hover{background:#1b5942}
+.cloud-page .cloud-table th{color:#fde047}
+.cloud-page .cloud-table td{color:#f1f5f9}
 .cloud-table input[type="checkbox"]{width:18px;height:18px;accent-color:#34d399}
 @media(max-width:850px){.cloud-base-selector{flex-direction:column;align-items:flex-start}.cloud-base-buttons{justify-content:flex-start}}

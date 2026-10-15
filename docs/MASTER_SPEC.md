@@ -2,6 +2,11 @@
 
 ## Navegação documental
 
+Entrega de 15/10/2026: snapshots pessoais na tabela `longitude_workspace_records`, separados por `auth.uid()`, para GEO, laudos, processos técnicos e base de trabalho local. Login global em builds publicados, revisão otimista, arquivamento lógico e importação seletiva de backups. Os cadastros existentes permanecem nas tabelas originais; não se trata de compartilhamento por organização nem de migração de anexos. Especificação de publicação e pendências em [DEPLOY_LONGITUDE_GEO.md](DEPLOY_LONGITUDE_GEO.md).
+
+- [Auditoria de migração online](ONLINE_MIGRATION_AUDIT.md) — infraestrutura parcial, sem migração remota
+- [Plano de implantação online](DEPLOY_LONGITUDE_GEO.md) — gates de segurança, testes e rollback
+
 - [Arquitetura](architecture/ARCHITECTURE.md)
 - [Banco de dados](database/DATABASE.md)
 - [Módulos](modules/MODULES.md)

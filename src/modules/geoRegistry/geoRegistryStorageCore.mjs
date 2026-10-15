@@ -1,0 +1,4 @@
+import { GEO_REGISTRY_STORAGE_KEY } from "./geoRegistryModel.mjs";
+export function listProjectsFromStorage(storage) { try { const data = JSON.parse(storage.getItem(GEO_REGISTRY_STORAGE_KEY) || "[]"); return Array.isArray(data) ? data : []; } catch { return []; } }
+export function saveProjectToStorage(storage, project) { const projects = listProjectsFromStorage(storage); const stored = { ...project, updatedAt: new Date().toISOString() }; const index = projects.findIndex((item) => item.id === stored.id); if (index >= 0) projects[index] = stored; else projects.unshift(stored); storage.setItem(GEO_REGISTRY_STORAGE_KEY, JSON.stringify(projects)); return stored; }
+export function deleteProjectFromStorage(storage, id) { storage.setItem(GEO_REGISTRY_STORAGE_KEY, JSON.stringify(listProjectsFromStorage(storage).filter((item) => item.id !== id))); }

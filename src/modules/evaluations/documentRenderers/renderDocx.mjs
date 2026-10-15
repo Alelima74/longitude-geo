@@ -1,0 +1,33 @@
+import { AlignmentType, BorderStyle, Document, Footer, Header, HeadingLevel, Packer, PageBreak, PageNumber, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+const green = "176B3A", ink = "18324A", gray = "EAF0EC";
+const run = (text, options = {}) => new TextRun({ text: String(text ?? ""), font: "Arial", size: options.size || 22, bold: options.bold, color: options.color || "222222", italics: options.italics });
+function cell(value, header = false) { return new TableCell({ shading: header ? { fill: green } : undefined, margins: { top: 100, bottom: 100, left: 120, right: 120 }, children: [new Paragraph({ children: [run(value, { bold: header, color: header ? "FFFFFF" : "222222", size: 18 })] })] }); }
+function blockToDocx(block) {
+  if (block.type === "paragraph") return [new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { after: 160, line: 320 }, children: [run(block.content)] })];
+  if (block.type === "subheading") return [new Paragraph({ heading: HeadingLevel.HEADING_2, keepNext: true, children: [run(`${block.number} - ${block.title}`, { bold: true, size: 24, color: ink })] })];
+  if (block.type === "source") return [new Paragraph({ spacing: { before: 80, after: 120 }, children: [run(block.content, { italics: true, size: 17, color: "666666" })] })];
+  if (block.type === "formula") return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 160 }, shading: { fill: gray }, children: [run(block.content, { bold: true, size: 21, color: ink })] })];
+  if (block.type === "bullets") return block.items.map(item => new Paragraph({ bullet: { level: 0 }, spacing: { after: 80 }, children: [run(item)] }));
+  if (block.type === "figure") return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160, after: 80 }, shading: { fill: "F4F6F4" }, children: [run(`\n\n${block.label}\n\n`, { bold: true, color: "708078" })] }), new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 160 }, children: [run(block.caption, { italics: true, size: 18 })] })];
+  if (block.type === "status") return [new Paragraph({ spacing: { before: 120, after: 160 }, shading: { fill: "FFF3CD" }, children: [run(block.content, { bold: true, color: "705000" })] })];
+  if (block.type === "signature") return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 700 }, children: [run("________________________________________")]}), new Paragraph({ alignment: AlignmentType.CENTER, children: [run(block.name, { bold: true })] }), new Paragraph({ alignment: AlignmentType.CENTER, children: [run(block.registration, { size: 18 })] })];
+  if (block.type === "result") return [new Paragraph({ heading: HeadingLevel.HEADING_2, children: [run(block.title, { bold: true, size: 24, color: green })] }), new Table({ width: { size: 9360, type: WidthType.DXA }, rows: block.items.map(([a,b]) => new TableRow({ children: [cell(a, true), cell(b)] })) })];
+  if (block.type === "table") return [block.caption ? new Paragraph({ keepNext: true, children: [run(block.caption, { italics: true, size: 18 })] }) : null, new Table({ width: { size: 9360, type: WidthType.DXA }, rows: [new TableRow({ tableHeader: true, children: block.headers.map(h => cell(h, true)) }), ...block.rows.map(row => new TableRow({ children: row.map(v => cell(v)) }))] })].filter(Boolean);
+  return [];
+}
+export async function createEvaluationDocxBlob(model) {
+  const body = [];
+  body.push(new Paragraph({ spacing: { before: 1800, after: 240 }, alignment: AlignmentType.CENTER, children: [run("LONGITUDE GEO INTELLIGENCE", { bold: true, size: 24, color: green })] }));
+  body.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 360 }, children: [run(model.title, { bold: true, size: 38, color: ink })] }));
+  body.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 160 }, children: [run(model.property?.name, { bold: true, size: 30 })] }));
+  body.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 1000 }, children: [run(`${model.metadata.municipality}/${model.metadata.state}`, { size: 24 })] }));
+  if (model.metadata.demo) body.push(new Paragraph({ alignment: AlignmentType.CENTER, shading: { fill: "FFF3CD" }, children: [run("DOCUMENTO DEMONSTRATIVO - REVISÃO TÉCNICA OBRIGATÓRIA", { bold: true, color: "705000" })] }));
+  body.push(new Paragraph({ children: [new PageBreak()] }));
+  body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [run("SUMÁRIO", { bold: true, size: 30, color: green })] }));
+  model.summary.forEach(s => body.push(new Paragraph({ spacing: { after: 70 }, children: [run(`${s.number}  ${s.title}`, { size: 20 })] })));
+  for (const section of model.sections) { body.push(new Paragraph({ children: [new PageBreak()] })); body.push(new Paragraph({ heading: HeadingLevel.HEADING_1, keepNext: true, children: [run(`${section.number} - ${section.title}`, { bold: true, size: 30, color: green })] })); section.blocks.forEach(b => body.push(...blockToDocx(b))); }
+  const doc = new Document({ styles: { default: { document: { run: { font: "Arial", size: 22 }, paragraph: { spacing: { after: 160, line: 320 } } } }, paragraphStyles: [{ id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: "Arial", size: 30, bold: true, color: green }, paragraph: { spacing: { before: 300, after: 180 }, keepNext: true } }, { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: "Arial", size: 24, bold: true, color: ink }, paragraph: { spacing: { before: 220, after: 120 }, keepNext: true } }] }, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, right: 1134, bottom: 1134, left: 1134, header: 567, footer: 567 } } }, headers: { default: new Header({ children: [new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, color: "B8C8BE", size: 4 } }, children: [run("LONGITUDE GEO INTELLIGENCE | LAUDO TÉCNICO", { bold: true, size: 16, color: green })] })] }) }, footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("Página ", { size: 16, color: "666666" }), new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "666666" })] })] }) }, children: body }] });
+  return Packer.toBlob(doc);
+}
+export async function downloadEvaluationDocx(model, filename) { const blob = await createEvaluationDocxBlob(model); download(blob, filename); }
+function download(blob, filename) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }

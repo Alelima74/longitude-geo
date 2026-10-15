@@ -29,10 +29,13 @@ export default function PwaInstallButton() {
 
     window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     window.addEventListener("appinstalled", onInstalled);
+    const onInstallRequested = () => setShowHelp(true);
+    window.addEventListener("longitude:install", onInstallRequested);
 
     return () => {
       window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
       window.removeEventListener("appinstalled", onInstalled);
+      window.removeEventListener("longitude:install", onInstallRequested);
     };
   }, []);
 

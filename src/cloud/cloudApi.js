@@ -20,8 +20,9 @@ export function getSession() {
   }
 }
 
-export function clearSession() {
+export function clearSession({ notify = true } = {}) {
   localStorage.removeItem(TOKEN_KEY);
+  if (notify) window.dispatchEvent(new Event('longitude:session'));
 }
 
 function saveSession(session) {
@@ -102,7 +103,12 @@ export async function signIn(email, password) {
   return saveSession(await parseResponse(response));
 }
 
-export async function refreshSession(force = false) {
+let refreshingSession;
+export function refreshSession(force = false) {
+  if (!refreshingSession) refreshingSession = performRefreshSession(force).finally(() => { refreshingSession = null; });
+  return refreshingSession;
+}
+async function performRefreshSession(force = false) {
   const session = getSession();
   if (!session?.refresh_token) return session;
 
@@ -120,7 +126,8 @@ export async function refreshSession(force = false) {
     return saveSession(await parseResponse(response));
   } catch (error) {
     if (error?.status === 400 || error?.status === 401) {
-      clearSession();
+      clearSession({ notify: false });
+      window.dispatchEvent(new Event('longitude:session-expired'));
       throw new Error("Sua sessão expirou por completo. Entre novamente.");
     }
     throw error;
@@ -136,11 +143,11 @@ async function validSession() {
   return session;
 }
 
-async function apiFetch(path, options = {}, requireLogin = false) {
+export async function apiFetch(path, options = {}, requireLogin = false) {
   let session = await validSession();
 
   if (requireLogin && !session?.access_token) {
-    throw new Error("Entre como administrador.");
+    throw new Error("Faça login para acessar a nuvem.");
   }
 
   const execute = (currentSession) => fetch(`${SUPABASE_URL}${path}`, {

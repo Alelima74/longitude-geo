@@ -1,12 +1,14 @@
 import * as turf from "@turf/turf";
 
-export function verticesToFeature(vertices) {
+export function canonicalSurveyGeometry(vertices) {
   const valid = (vertices || []).filter((v) => Number.isFinite(v.longitude) && Number.isFinite(v.latitude));
-  if (valid.length < 3) return null;
+  if (valid.length < 3 || valid.length !== (vertices || []).length) return null;
   const coordinates = valid.map((v) => [v.longitude, v.latitude]);
   if (coordinates[0][0] !== coordinates.at(-1)[0] || coordinates[0][1] !== coordinates.at(-1)[1]) coordinates.push([...coordinates[0]]);
   try { return turf.polygon([coordinates], {}); } catch { return null; }
 }
+
+export const verticesToFeature = canonicalSurveyGeometry;
 
 function validateGeometryBase(vertices, reported = {}) {
   const issues = [];

@@ -4,6 +4,27 @@
 
 ## 1. Identificação da execução
 
+### Sincronização pessoal — 15/10/2026
+
+- [x] 124 testes automatizados iniciais, incluindo snapshot integral, conflito, preservação de revisão e importação.
+- [x] Migration executada em PostgreSQL descartável: dois usuários isolados, anônimo negado, identidade imutável, revisão e arquivamento.
+- [x] Build local após integração inicial.
+- [ ] Login no Preview e carregamento dos quatro tipos de snapshot na conta real.
+- [ ] Salvar projeto real autorizado e abrir em navegador independente/celular.
+- [ ] Confirmar conflito de revisão e erro de rede sem gravação local silenciosa.
+- [ ] Confirmar login e navegação responsiva em 390 e 768 px.
+- [ ] Conferir cadastro e origem dos dados antes de promover produção.
+
+### Preparação online — 04/09/2026
+
+- [x] 116 testes unitários, incluindo adapters, backup sem sessão e conflitos de revisão.
+- [x] Build após preparação; avisos de tamanho de bundle permanecem.
+- [x] Configurações → Migração para nuvem abre e inventaria sem envio remoto.
+- [ ] Aplicar/validar migration em ambiente de teste autorizado.
+- [ ] Validar login global, RLS real e Storage privado.
+- [ ] Integrar todos os módulos e testar os mesmos dados em dois navegadores.
+- [ ] Backup completo e migração idempotente de dados reais autorizados.
+
 - [ ] Registrar versão exibida, `VERSION.json`, branch e commit testado.
 - [ ] Registrar ambiente: local, Preview ou Produção.
 - [ ] Registrar navegador, sistema operacional e dispositivo.

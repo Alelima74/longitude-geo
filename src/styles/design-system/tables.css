@@ -1,0 +1,5 @@
+table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--lg-color-surface); }
+thead { background: #f9fafb; color: var(--lg-color-text-secondary); }
+th { font-size: 12px; font-weight: 600; text-align: left; }
+th, td { padding: 12px 16px; border-bottom: 1px solid var(--lg-color-border); }
+tbody tr:hover { background: #fafcfb; }

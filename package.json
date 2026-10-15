@@ -3,16 +3,18 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test tests/geoRegistry.test.mjs"
+    "test": "node --test tests/geoRegistry.test.mjs tests/pwa.test.mjs tests/onlinePersistence.test.mjs tests/pdfExport.test.mjs tests/workspaceCloud.test.mjs",
+    "test:db": "node scripts/validate-workspace-sql.mjs"
   },
   "dependencies": {
     "@mapbox/shp-write": "^0.4.0",
+    "@supabase/supabase-js": "^2.109.0",
     "@tmcw/togeojson": "^7.1.0",
     "@turf/turf": "^7.2.0",
     "docx": "^8.5.0",
     "docxtemplater": "^3.67.5",
     "html2canvas": "^1.4.1",
-    "jspdf": "^3.0.1",
+    "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.2",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
@@ -23,14 +25,15 @@
     "react-dom": "^18.3.1",
     "shpjs": "^6.1.0",
     "tesseract.js": "^6.0.1",
-    "vite": "^5.4.0"
+    "vite": "^6.4.4"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1"
+    "@vitejs/plugin-react": "^4.3.1",
+    "supabase": "^2.114.0"
   },
   "version": "7.4.1-rc.4",
   "name": "longitude-geo-v72-release-candidate",
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   }
 }

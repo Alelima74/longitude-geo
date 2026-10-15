@@ -21,7 +21,7 @@ O repositório local informa integração com GitHub, mas URL, workflows de CI e
 
 ## 3. Requisitos de build
 
-- Node.js 20.x, conforme `package.json`;
+- Node.js 22.x, conforme `package.json`;
 - dependências instaladas pelo lockfile;
 - variáveis do Supabase configuradas no ambiente;
 - acesso de rede para mapas, Supabase e serviços externos.
@@ -34,7 +34,7 @@ npm run build
 npm run preview
 ```
 
-Não há script automatizado de teste ou lint. O build gera `dist/`.
+Há script `npm test` para testes de GEO, PWA, persistência e exportação PDF. Não há script de lint. O build gera `dist/`. A revalidação de 15/10/2026 e os ambientes identificados estão em [DEPLOY_LONGITUDE_GEO.md](DEPLOY_LONGITUDE_GEO.md).
 
 ## 4. Variáveis de ambiente
 
