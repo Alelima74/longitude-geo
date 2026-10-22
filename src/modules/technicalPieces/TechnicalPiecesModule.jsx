@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { cloudWorkspaceEnabled, workspaceRecords } from '../../data/online/workspaceCloud.js';
 import { downloadWorkspaceCopy } from '../../data/online/downloadWorkspaceCopy.js';
+import { applySaveAcknowledgement } from '../../data/online/saveAcknowledgement.mjs';
 import {
   AlignmentType,
   Document,
@@ -370,7 +371,7 @@ export default function TechnicalPiecesModule() {
       const saved = cloudWorkspaceEnabled() ? await workspaceRecords('technical').save(snapshot) : snapshot;
       const next = [saved, ...processes.filter(p => p.id !== saved.id)];
       if (!cloudWorkspaceEnabled()) saveProcesses(next);
-      setProcesses(next); setForm(current => current === snapshot ? saved : { ...current, cloudRevision: saved.cloudRevision });
+      setProcesses(next); setForm(current => applySaveAcknowledgement(current, snapshot, saved));
       setMessage(cloudWorkspaceEnabled() ? 'Processo salvo na nuvem.' : 'Processo salvo localmente.');
     } catch (error) { setMessage(`Erro ao salvar: ${error.message}`); }
     finally { setProcessBusy(false); }

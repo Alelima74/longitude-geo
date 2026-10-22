@@ -1,5 +1,13 @@
 # Persistência online e deploy — Longitude Geo
 
+## Revalidação da publicação — 22/10/2026
+
+- PR de entrega: `https://github.com/Alelima74/longitude-geo/pull/1`, ainda draft enquanto a aceitação autenticada está pendente.
+- Preview `899ef67`: `https://longitude-geo-vercel-bcsdhfgsq-longitude74.vercel.app/`, confirmado Ready na Vercel; a produção permanece no commit anterior.
+- Login exibido corretamente; viewport de 390 px sem transbordamento horizontal. Sessão autenticada do aplicativo ainda não disponibilizada ao agente. Não confundir a conta Vercel/Supabase Dashboard com o login do aplicativo.
+- 125 testes aprovados após correção da confirmação de salvamento; auditoria npm com zero vulnerabilidades conhecidas. O manifesto da versão detalha os arquivos adicionais.
+- Não foram criados registros fictícios nem modificados dados de produção nesta revalidação.
+
 ## Sincronização pessoal e candidato 74134 — 15/10/2026
 
 Esta seção substitui o diagnóstico inicial para a entrega pessoal. Os registros abaixo permanecem como histórico das etapas anteriores.

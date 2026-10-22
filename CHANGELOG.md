@@ -6,6 +6,8 @@ Este arquivo registra somente fatos comprováveis no repositório. A presença d
 
 ## V74.1.3-rc.4 — sincronização pessoal — 15/10/2026
 
+Revalidação em 22/10/2026: Preview `899ef67` com build Ready; corrigida confirmação assíncrona de salvamento para preservar edições feitas durante o envio e impedir aplicação de revisão a outro projeto aberto. Teste de regressão incluído.
+
 - login global na versão publicada; mesma sessão utilizada pelos módulos existentes;
 - GEO, laudos e processos de Peças Técnicas passam a carregar e salvar snapshots no Supabase, por usuário; desenvolvimento local preserva o armazenamento anterior;
 - base local de clientes, imóveis e análises territoriais ganhou carregamento remoto e salvamento explícito; os cadastros `lg_*` continuam nas tabelas existentes;

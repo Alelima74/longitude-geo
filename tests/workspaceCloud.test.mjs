@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { createWorkspaceRecordAdapter, assertCloudProject } from '../src/data/online/workspaceRecordAdapter.mjs';
 import { prepareWorkspaceImport } from '../src/data/online/workspaceImport.mjs';
 import { createGeoRegistryProject } from '../src/modules/geoRegistry/geoRegistryModel.mjs';
+import { applySaveAcknowledgement } from '../src/data/online/saveAcknowledgement.mjs';
+
+test('confirmação de envio preserva edições novas e não aplica revisão a outro projeto',()=>{
+  const submitted={id:'a',text:'Enviado',cloudRevision:1}, stored={...submitted,cloudRevision:2};
+  assert.equal(applySaveAcknowledgement(submitted,submitted,stored),stored);
+  const edited={...submitted,text:'Editado durante envio'};
+  assert.deepEqual(applySaveAcknowledgement(edited,submitted,stored),{...edited,cloudRevision:2});
+  const another={id:'b',text:'Outro projeto'};
+  assert.equal(applySaveAcknowledgement(another,submitted,stored),another);
+  assert.equal(applySaveAcknowledgement(null,submitted,stored),null);
+});
 
 test('dois aparelhos carregam snapshot integral e edição obsoleta falha sem sobrescrever',async()=>{
   let row=null;

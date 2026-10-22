@@ -30,6 +30,7 @@ import TechnicalDesk from "./technicalDesk/TechnicalDesk.jsx";
 import { createSampleTechnicalProject } from "./technicalDesk/sampleTechnicalProject.mjs";
 import { cloudWorkspaceEnabled } from '../../data/online/workspaceCloud.js';
 import { downloadWorkspaceCopy } from '../../data/online/downloadWorkspaceCopy.js';
+import { applySaveAcknowledgement } from '../../data/online/saveAcknowledgement.mjs';
 import "./geo-registry.css";
 import "./geo-registry-light.css";
 import "./documents/previews/requerimentoPrint.css";
@@ -92,7 +93,7 @@ export default function GeoRegistryModule({ requestedSection = "Visão Geral" })
 
   const persist = async (next = project) => {
     if (busy) return; setBusy(true); setMessage('Salvando...');
-    try { const stored = await saveGeoRegistryProject(next); setProject(stored); setMessage(cloudWorkspaceEnabled() ? 'Salvo na nuvem. Disponível nos outros aparelhos com a mesma conta.' : 'Projeto salvo neste navegador.'); }
+    try { const stored = await saveGeoRegistryProject(next); setProject(current => applySaveAcknowledgement(current, next, stored)); setMessage(cloudWorkspaceEnabled() ? 'Versão enviada à nuvem. Salve novamente se alterou dados durante o envio.' : 'Projeto salvo neste navegador.'); }
     catch (error) { setMessage(`Erro ao salvar: ${error.message}`); }
     finally { setBusy(false); }
   };
@@ -262,7 +263,7 @@ function CartorialDataEditor({ project, pieces, setProject }) {
   const [draft, setDraft] = useState(() => cartorialDraftFromContext(definitions, pieces.context));
   useEffect(() => { setDraft(cartorialDraftFromContext(definitions, pieces.context)); }, [project.id]);
   const [saving, setSaving] = useState(false), [saveMessage, setSaveMessage] = useState("");
-  const save = async () => { if (saving) return; setSaving(true); setSaveMessage("Salvando..."); try { setProject(await saveGeoRegistryProject(confirmCartorialData(project, draft))); setSaveMessage(cloudWorkspaceEnabled() ? "Salvo na nuvem." : "Salvo neste navegador."); } catch (error) { setSaveMessage(`Erro ao salvar: ${error.message}`); } finally { setSaving(false); } };
+  const save = async () => { if (saving) return; setSaving(true); setSaveMessage("Salvando..."); try { const stored = await saveGeoRegistryProject(confirmCartorialData(project, draft)); setProject(current => applySaveAcknowledgement(current, project, stored)); setSaveMessage(cloudWorkspaceEnabled() ? "Salvo na nuvem." : "Salvo neste navegador."); } catch (error) { setSaveMessage(`Erro ao salvar: ${error.message}`); } finally { setSaving(false); } };
   return <section className="gr-panel"><h3>Dados para Peças Cartoriais</h3><p>Valores documentais permanecem rastreáveis. Campos preenchidos aqui são salvos como confirmação manual.</p>{definitions.map(([group, fields]) => <section key={group}><h4>{group}</h4><div className="gr-fields">{fields.map(([label, path]) => { const current = contextField(path); const shownValue=["owner.type"].includes(path)?translateInternalValue(draft[path]):draft[path]; return <label key={path}><span>{label}</span><input value={shownValue} placeholder="PREENCHER" readOnly={path==="owner.type"} onChange={(event) => setDraft({ ...draft, [path]: event.target.value })} /><small>{current?.value ? `Origem: ${translateInternalValue(current.origin)} · ${current.confirmed ? "Confirmado" : "Conferir"}` : "PREENCHER"}</small></label>; })}</div></section>)}<p role="status">{saveMessage}</p><button disabled={saving} className="gr-primary" onClick={save}>{saving ? "SALVANDO..." : "SALVAR E CONFIRMAR DADOS PARA AS PEÇAS"}</button></section>;
 }
 function DocumentPreview({ preview, project, setProject, close }) {

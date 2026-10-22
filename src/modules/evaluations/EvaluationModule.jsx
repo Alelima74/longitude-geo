@@ -11,6 +11,7 @@ import{clientRepository}from"../../core/clients/clientRepository.js";
 import{clientDisplayName,filterClients}from"../../core/clients/clientMapper.mjs";
 import { cloudWorkspaceEnabled } from "../../data/online/workspaceCloud.js";
 import { downloadWorkspaceCopy } from '../../data/online/downloadWorkspaceCopy.js';
+import { applySaveAcknowledgement } from '../../data/online/saveAcknowledgement.mjs';
 import"./evaluation.css";
 import"./evaluation-complete.css";
 import"./evaluation-document.css";
@@ -24,7 +25,7 @@ export default function EvaluationModule({data={imoveis:[]},onNavigate}) {
   useEffect(()=>{if(view!=="home")return;let active=true;setLoading(true);Promise.resolve().then(listEvaluationProjects).then(rows=>{if(active)setProjects(rows);}).catch(error=>{if(active)setMessage(error.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[view]);
   const open=(p,s="Capa e Identificação")=>{const next=structuredClone(p);next.completeFields ||= createCompleteDemoFields(next);setProject(next);setSection(s);setMessage("");setView("editor");};
   const duplicate=p=>{const {cloudRevision,...copy}=structuredClone(p);open({...copy,id:crypto.randomUUID(),isDemo:false,status:"DRAFT",cloudReviewConfirmed:false,projectName:`Cópia — ${p.projectName}`});};
-  const save=async()=>{if(saving||project.isDemo)return;setSaving(true);setMessage("Salvando...");const snapshot=project;try{const next=await saveEvaluationProject(snapshot);setProject(current=>current===snapshot?next:{...current,cloudRevision:next.cloudRevision});setMessage(cloudWorkspaceEnabled()?"Salvo na nuvem. Disponível com a mesma conta nos outros aparelhos.":"Salvo neste navegador.");}catch(error){setMessage(`Erro ao salvar: ${error.message}`);}finally{setSaving(false);}};
+  const save=async()=>{if(saving||project.isDemo)return;setSaving(true);setMessage("Salvando...");const snapshot=project;try{const next=await saveEvaluationProject(snapshot);setProject(current=>applySaveAcknowledgement(current,snapshot,next));setMessage(cloudWorkspaceEnabled()?"Salvo na nuvem. Disponível com a mesma conta nos outros aparelhos.":"Salvo neste navegador.");}catch(error){setMessage(`Erro ao salvar: ${error.message}`);}finally{setSaving(false);}};
   const status=<div className="workspace-sync"><span role="status">{loading?"Carregando laudos...":message||(cloudWorkspaceEnabled()?"Laudos da sua conta na nuvem":"Laudos deste navegador")}</span>{view==="home"&&<button disabled={loading} onClick={reload}>Atualizar laudos</button>}</div>;
   if(view==="models")return <>{status}<Models back={()=>setView("home")} view={p=>open(p,"Pré-visualização")} use={duplicate}/></>;
   if(view==="editor")return <>{status}{cloudWorkspaceEnabled()&&!project.isDemo&&<label className="workspace-sync"><input type="checkbox" disabled={saving} checked={Boolean(project.cloudReviewConfirmed)} onChange={e=>setProject({...project,cloudReviewConfirmed:e.target.checked})}/>Conferi os dados deste laudo e substituí eventuais informações demonstrativas antes de salvar na nuvem.</label>}<fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><Editor p={project} setP={setProject} section={section} setSection={setSection} back={()=>setView("home")} save={save}/></fieldset></>;
