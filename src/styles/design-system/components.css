@@ -1,0 +1,8 @@
+.lg-card { background: var(--lg-color-surface); border: 1px solid var(--lg-color-border); border-radius: var(--lg-radius-lg); box-shadow: var(--lg-shadow-card); }
+.lg-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--lg-color-border-strong); border-radius: var(--lg-radius-md); padding: 0 14px; background: var(--lg-color-surface); color: var(--lg-color-text); font-weight: 600; cursor: pointer; }
+.lg-button:hover { background: var(--lg-color-surface-subtle); }
+.lg-button--primary { border-color: var(--lg-color-brand); background: var(--lg-color-brand); color: #fff; }
+.lg-button--primary:hover { background: var(--lg-color-brand-strong); }
+.lg-icon-button { width: 38px; height: 38px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: var(--lg-radius-md); background: transparent; color: var(--lg-color-text-secondary); cursor: pointer; }
+.lg-icon-button:hover { border-color: var(--lg-color-border); background: var(--lg-color-surface-subtle); color: var(--lg-color-text); }
+.lg-icon { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

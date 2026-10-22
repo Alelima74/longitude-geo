@@ -1,0 +1,34 @@
+body { background: var(--lg-color-page); }
+.app-shell { min-height: 100vh; display: grid; grid-template-columns: var(--lg-sidebar-width) minmax(0, 1fr); background: var(--lg-color-page); }
+.longitude-sidebar { position: sticky; top: 0; z-index: var(--lg-z-sidebar); height: 100vh; display: flex; flex-direction: column; border-right: 1px solid var(--lg-color-border); background: var(--lg-color-surface); }
+.longitude-brand { display: flex; align-items: center; gap: 11px; min-height: 76px; padding: 14px 18px; border-bottom: 1px solid var(--lg-color-border); }
+.longitude-brand img { width: 42px; height: 42px; object-fit: contain; }
+.longitude-brand strong, .longitude-brand span { display: block; }
+.longitude-brand strong { font-size: 15px; }
+.longitude-brand span { color: var(--lg-color-text-secondary); font-size: 12px; }
+.longitude-nav { flex: 1; overflow-y: auto; padding: 12px 10px 20px; }
+.longitude-nav-group { margin-top: 14px; }
+.longitude-nav-group:first-child { margin-top: 0; }
+.longitude-nav-group h2 { margin: 0 10px 6px; color: var(--lg-color-text-muted); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.longitude-nav button { position: relative; width: 100%; min-height: 40px; display: flex; align-items: center; gap: 11px; border: 0; border-radius: var(--lg-radius-md); padding: 8px 11px; background: transparent; color: #475467; text-align: left; cursor: pointer; }
+.longitude-nav button:hover { background: #f7f9f8; color: var(--lg-color-text); }
+.longitude-nav button.active { background: var(--lg-color-brand-soft); color: var(--lg-color-brand-strong); font-weight: 600; }
+.longitude-nav button.active::before { position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--lg-color-brand); content: ""; }
+.longitude-sidebar-footer { padding: 12px; border-top: 1px solid var(--lg-color-border); }
+.longitude-sidebar-footer button { width: 100%; justify-content: flex-start; }
+.main { min-width: 0; background: var(--lg-color-page); }
+.longitude-sidebar { min-width: 0; }
+.longitude-header { position: sticky; top: 0; z-index: var(--lg-z-header); min-height: var(--lg-header-height); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 24px; border-bottom: 1px solid var(--lg-color-border); background: rgba(255,255,255,.96); backdrop-filter: blur(10px); }
+.longitude-breadcrumb { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--lg-color-text-secondary); font-size: 13px; }
+.longitude-breadcrumb strong { overflow: hidden; color: var(--lg-color-text); text-overflow: ellipsis; white-space: nowrap; }
+.longitude-header-actions { display: flex; align-items: center; gap: 8px; }
+.longitude-global-search { width: min(320px, 28vw); position: relative; }
+.longitude-global-search input { width: 100%; padding: 0 12px 0 38px; }
+.longitude-global-search svg { position: absolute; left: 12px; top: 12px; }
+.longitude-user { display: flex; align-items: center; gap: 9px; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--lg-color-border); }
+.longitude-avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--lg-color-brand-soft); color: var(--lg-color-brand-strong); font-weight: 700; }
+.longitude-user span { display: block; font-size: 12px; }
+.longitude-user small { display: block; color: var(--lg-color-text-secondary); }
+.longitude-page { width: min(100%, var(--lg-content-max)); margin: 0 auto; padding: 28px 32px 48px; }
+@media (max-width: 1023px) { .app-shell { grid-template-columns: 76px minmax(0,1fr); } .longitude-brand div, .longitude-nav-group h2, .longitude-nav button span, .longitude-sidebar-footer span { display:none; } .longitude-brand { justify-content:center; padding:12px; } .longitude-nav button { justify-content:center; } .longitude-global-search, .longitude-user div { display:none; } }
+@media (max-width: 767px) { .app-shell { grid-template-columns: 1fr; } .longitude-sidebar { position: static; width: 100%; height: auto; } .longitude-brand { justify-content:flex-start; min-height:62px; } .longitude-brand div { display:block; } .longitude-nav { display:flex; overflow-x:auto; padding:8px; } .longitude-nav-group { display:contents; } .longitude-nav button { width:auto; flex:0 0 auto; } .longitude-nav button span { display:block; } .longitude-sidebar-footer { display:none; } .longitude-header { padding:0 14px; } .longitude-header-actions .lg-icon-button { display:none; } .longitude-page { padding:20px 16px 36px; } }

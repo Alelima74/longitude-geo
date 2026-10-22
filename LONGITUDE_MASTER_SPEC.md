@@ -1,5 +1,7 @@
 # LONGITUDE MASTER SPEC — Atualização V73.1
 
+> **Especificação histórica da V73.1.** A especificação canônica vigente está em [docs/MASTER_SPEC.md](docs/MASTER_SPEC.md).
+
 ## Princípio de cadastro
 Pessoas, proprietários, confrontantes, imóveis e marcos são entidades reutilizáveis. O sistema deve pesquisar antes de criar e permitir correção sem apagar o histórico.
 

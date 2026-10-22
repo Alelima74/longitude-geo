@@ -1,0 +1,4 @@
+input, select, textarea { border: 1px solid var(--lg-color-border-strong); border-radius: var(--lg-radius-md); background: var(--lg-color-surface); color: var(--lg-color-text); }
+input, select { min-height: 42px; }
+input:focus, select:focus, textarea:focus { border-color: var(--lg-color-brand); outline: 3px solid rgba(33, 122, 75, .12); }
+::placeholder { color: var(--lg-color-text-muted); }

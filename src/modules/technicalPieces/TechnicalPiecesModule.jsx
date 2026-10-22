@@ -1,4 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { cloudWorkspaceEnabled, workspaceRecords } from '../../data/online/workspaceCloud.js';
+import { downloadWorkspaceCopy } from '../../data/online/downloadWorkspaceCopy.js';
+import { applySaveAcknowledgement } from '../../data/online/saveAcknowledgement.mjs';
 import {
   AlignmentType,
   Document,
@@ -71,6 +74,7 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 function loadProcesses() {
+  if (cloudWorkspaceEnabled()) return workspaceRecords('technical').list();
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
   } catch {
@@ -278,7 +282,9 @@ function neighborsTableDocument(data) {
 }
 
 export default function TechnicalPiecesModule() {
-  const [processes, setProcesses] = useState(loadProcesses);
+  const [processes, setProcesses] = useState([]);
+  const [processBusy, setProcessBusy] = useState(false);
+  useEffect(() => { let active = true; Promise.resolve().then(loadProcesses).then(rows => { if (active) setProcesses(rows); }).catch(error => { if (active) setMessage(error.message); }); return () => { active = false; }; }, []);
   const [form, setForm] = useState({ ...EMPTY, id: uid(), updatedAt: new Date().toISOString() });
   const [neighbor, setNeighbor] = useState({ id: "", name: "", document: "", propertyName: "", registration: "", cns: "", incraCode: "", sigefCode: "", carCode: "", municipality: "", state: "MT", startVertex: "", endVertex: "", lengthM: "", boundaryType: "", notes: "" });
   const [tab, setTab] = useState("process");
@@ -358,11 +364,17 @@ export default function TechnicalPiecesModule() {
   function update(key, value) {
     setForm(prev => ({ ...prev, [key]: value, updatedAt: new Date().toISOString() }));
   }
-  function saveProcess() {
-    const next = [form, ...processes.filter(p => p.id !== form.id)];
-    setProcesses(next);
-    saveProcesses(next);
-    setMessage("Processo salvo localmente.");
+  async function saveProcess() {
+    if (processBusy) return; setProcessBusy(true); setMessage('Salvando...');
+    const snapshot = form;
+    try {
+      const saved = cloudWorkspaceEnabled() ? await workspaceRecords('technical').save(snapshot) : snapshot;
+      const next = [saved, ...processes.filter(p => p.id !== saved.id)];
+      if (!cloudWorkspaceEnabled()) saveProcesses(next);
+      setProcesses(next); setForm(current => applySaveAcknowledgement(current, snapshot, saved));
+      setMessage(cloudWorkspaceEnabled() ? 'Processo salvo na nuvem.' : 'Processo salvo localmente.');
+    } catch (error) { setMessage(`Erro ao salvar: ${error.message}`); }
+    finally { setProcessBusy(false); }
   }
   function newProcess() {
     setForm({ ...EMPTY, id: uid(), updatedAt: new Date().toISOString() });
@@ -374,11 +386,15 @@ export default function TechnicalPiecesModule() {
     setTab("process");
     setMessage(`Processo “${item.name || item.propertyName}” carregado.`);
   }
-  function deleteProcess(id) {
-    const next = processes.filter(p => p.id !== id);
-    setProcesses(next);
-    saveProcesses(next);
-    if (form.id === id) newProcess();
+  async function deleteProcess(id) {
+    if (processBusy) return; setProcessBusy(true);
+    try {
+      if (cloudWorkspaceEnabled()) await workspaceRecords('technical').archive(id, processes.find(p => p.id === id)?.cloudRevision);
+      const next = processes.filter(p => p.id !== id);
+      if (!cloudWorkspaceEnabled()) saveProcesses(next);
+      setProcesses(next); if (form.id === id) newProcess();
+    } catch (error) { setMessage(error.message); }
+    finally { setProcessBusy(false); }
   }
   async function searchNeighborRegistry() {
     setRegistryLoading(true);
@@ -594,7 +610,9 @@ export default function TechnicalPiecesModule() {
         </div>
         <div className="technical-actions">
           <button onClick={newProcess}>Novo processo</button>
-          <button className="primary" onClick={saveProcess}>Salvar processo</button>
+          <button disabled={processBusy} className="primary" onClick={saveProcess}>{processBusy ? 'Salvando...' : 'Salvar processo'}</button>
+          <button onClick={() => downloadWorkspaceCopy(form, 'technical')}>Baixar cópia do processo</button>
+          <button disabled={processBusy} onClick={async () => { try { setProcesses(await loadProcesses()); setMessage('Lista de processos atualizada.'); } catch (error) { setMessage(error.message); } }}>Atualizar processos</button>
           <button className="primary" onClick={generatePackage}>Gerar documentos</button>
         </div>
       </div>
@@ -766,7 +784,7 @@ export default function TechnicalPiecesModule() {
 
       {tab === "saved" && (
         <div className="technical-card">
-          <h3>Processos salvos neste navegador</h3>
+          <h3>{cloudWorkspaceEnabled() ? 'Processos da sua conta na nuvem' : 'Processos salvos neste navegador'}</h3>
           <div className="technical-list">
             {processes.map(item => <div className="technical-row" key={item.id}><div><strong>{item.name || item.propertyName || "Processo sem nome"}</strong><span>{item.procedure} • {item.propertyName || "-"} • atualizado em {new Date(item.updatedAt).toLocaleString("pt-BR")}</span></div><div><button onClick={() => loadProcess(item)}>Abrir</button><button onClick={() => deleteProcess(item.id)}>Excluir</button></div></div>)}
             {!processes.length && <p>Nenhum processo salvo.</p>}

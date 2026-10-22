@@ -1,5 +1,7 @@
 # Arquitetura — V68
 
+> **Documento histórico.** A arquitetura canônica está em [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md).
+
 Esta versão inicia uma refatoração controlada, sem alterar as funcionalidades GIS.
 
 ## Módulos introduzidos

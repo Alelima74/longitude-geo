@@ -1,5 +1,7 @@
 # ROADMAP LONGITUDE GEO
 
+> **Roadmap histórico.** O planejamento canônico vigente está em [ROADMAP.md](ROADMAP.md).
+
 ## Produção
 V72.4 PWA.
 

@@ -23,6 +23,7 @@ function localWrite(table, rows) {
 }
 
 function availableOnline() {
+  if (import.meta.env.PROD && !(SUPABASE_URL && SUPABASE_KEY && getSession()?.access_token)) throw new Error('Sessão indisponível. Entre novamente; nenhum cadastro foi salvo localmente.');
   return Boolean(SUPABASE_URL && SUPABASE_KEY && getSession()?.access_token);
 }
 

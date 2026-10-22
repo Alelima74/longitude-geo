@@ -1,7 +1,7 @@
 .longitude-pwa-install {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  left: -9999px;
+  bottom: 0;
   z-index: 2200;
   display: flex;
   align-items: center;
@@ -24,26 +24,26 @@
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(0, 18, 11, .76);
+  background: rgba(16, 24, 40, .46);
   backdrop-filter: blur(5px);
 }
 .longitude-pwa-dialog {
   position: relative;
   width: min(430px, 100%);
-  border: 1px solid rgba(255, 224, 0, .65);
-  border-radius: 18px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
   padding: 24px;
-  background: #052b1c;
-  color: #f8fafc;
+  background: #fff;
+  color: #17212b;
   box-shadow: 0 24px 70px rgba(0, 0, 0, .52);
 }
-.longitude-pwa-dialog h2 { margin: 8px 0 16px; color: #ffe000; text-align: center; }
+.longitude-pwa-dialog h2 { margin: 8px 0 16px; color: #17212b; text-align: center; }
 .longitude-pwa-dialog ol { padding-left: 22px; line-height: 1.55; }
 .longitude-pwa-dialog p {
   margin: 16px 0 0;
   padding: 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, .07);
+  background: #f5f7f8;
   overflow-wrap: anywhere;
 }
 .longitude-pwa-icon { display: block; width: 86px; height: 86px; margin: 0 auto; border-radius: 20px; }
@@ -53,7 +53,7 @@
   top: 8px;
   border: 0;
   background: transparent;
-  color: #fff;
+  color: #667085;
   font-size: 30px;
   cursor: pointer;
 }

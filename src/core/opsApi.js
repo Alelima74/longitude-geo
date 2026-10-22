@@ -1,3 +1,4 @@
+import { refreshSession } from '../cloud/cloudApi.js';
 const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
@@ -7,17 +8,7 @@ function getStoredSession() {
 }
 
 async function refreshStoredSession() {
-  const current = getStoredSession();
-  if (!current?.refresh_token) return current;
-  const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-    method: "POST",
-    headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: current.refresh_token }),
-  });
-  if (!response.ok) return current;
-  const next = await response.json();
-  localStorage.setItem("longitude_cloud_session_v2", JSON.stringify(next));
-  return next;
+  return refreshSession(true);
 }
 
 async function request(path, options = {}, retry = true) {
@@ -45,9 +36,24 @@ async function request(path, options = {}, retry = true) {
 
 export function onlineConfigured() { return Boolean(SUPABASE_URL && SUPABASE_KEY); }
 export function onlineSession() { return getStoredSession(); }
+export function callRpc(name, payload = {}) {
+  return request(`/rest/v1/rpc/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
 
 export async function listRows(table, order = "created_at.desc") {
   return (await request(`/rest/v1/${table}?select=*&order=${encodeURIComponent(order)}`)) || [];
+}
+export async function listAllRows(table, order = "created_at.desc", pageSize = 1000) {
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = (await request(`/rest/v1/${table}?select=*&order=${encodeURIComponent(order)}&limit=${pageSize}&offset=${offset}`)) || [];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
 }
 export async function insertRow(table, payload) {
   const rows = await request(`/rest/v1/${table}`, { method: "POST", headers: { "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify(payload) });

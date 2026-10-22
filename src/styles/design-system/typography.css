@@ -1,0 +1,9 @@
+html { font-size: 16px; }
+body, button, input, select, textarea { font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif; }
+body { color: var(--lg-color-text); font-size: 14px; line-height: 1.5; }
+h1, h2, h3, h4 { color: var(--lg-color-text); letter-spacing: -.02em; }
+h1 { font-size: 28px; font-weight: 600; line-height: 1.25; }
+h2 { font-size: 20px; font-weight: 600; line-height: 1.3; }
+h3 { font-size: 16px; font-weight: 600; line-height: 1.4; }
+small, .lg-metadata { font-size: 12px; }
+.lg-description { color: var(--lg-color-text-secondary); font-size: 13px; }

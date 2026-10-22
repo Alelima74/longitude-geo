@@ -1,8 +1,8 @@
 {
-  "version": "74.1.3-rc.1",
-  "label": "Motor Documental — delimitadores corrigidos",
+  "version": "74.1.3-rc.4",
+  "label": "Projetos pessoais na nuvem e interface integrada",
   "environment": "preview",
-  "releaseDate": "2026-07-28",
+  "releaseDate": "2026-10-15",
   "status": "release-candidate",
-  "build": "74131"
+  "build": "74134"
 }
