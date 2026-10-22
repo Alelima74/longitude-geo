@@ -10,6 +10,8 @@
 - [x] Migration executada em PostgreSQL descartável: dois usuários isolados, anônimo negado, identidade imutável, revisão e arquivamento.
 - [x] Build local após integração inicial.
 - [ ] Login no Preview e carregamento dos quatro tipos de snapshot na conta real.
+- [x] Revalidação 22/10: login na conta real, carregamento da base e listas de GEO/laudos, atualização dos processos técnicos; sem gravação de registro fictício.
+- [x] Revalidação 22/10: interface autenticada em viewport de 390 px sem transbordamento horizontal.
 - [ ] Salvar projeto real autorizado e abrir em navegador independente/celular.
 - [ ] Confirmar conflito de revisão e erro de rede sem gravação local silenciosa.
 - [ ] Confirmar login e navegação responsiva em 390 e 768 px.

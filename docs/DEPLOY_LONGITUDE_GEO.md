@@ -2,6 +2,10 @@
 
 ## Revalidação da publicação — 22/10/2026
 
+Atualização da aceitação: o usuário entrou no aplicativo. Confirmados na sessão autenticada: base de trabalho carregada da nuvem; listas de GEO e laudos consultadas sem erro; atualização dos processos técnicos; tela autenticada em 390 px sem transbordamento horizontal. Nenhum projeto fictício ou gravação de teste foi efetuado no banco de produção. Ainda não houve teste de gravação real nem comparação em dois dispositivos independentes. As listas de GEO/laudos da nuvem estavam vazias; os dados locais anteriores não foram migrados.
+
+Preview da correção final `4c7f2ae`: `https://longitude-geo-vercel-k39g4t1ym-longitude74.vercel.app/`, Ready na Vercel. O endereço da branch é `https://longitude-geo-vercel-git-feature-cloud-migration-longitude74.vercel.app/`. As pendências de login listadas abaixo descrevem o momento anterior desta revalidação.
+
 - PR de entrega: `https://github.com/Alelima74/longitude-geo/pull/1`, ainda draft enquanto a aceitação autenticada está pendente.
 - Preview `899ef67`: `https://longitude-geo-vercel-bcsdhfgsq-longitude74.vercel.app/`, confirmado Ready na Vercel; a produção permanece no commit anterior.
 - Login exibido corretamente; viewport de 390 px sem transbordamento horizontal. Sessão autenticada do aplicativo ainda não disponibilizada ao agente. Não confundir a conta Vercel/Supabase Dashboard com o login do aplicativo.
